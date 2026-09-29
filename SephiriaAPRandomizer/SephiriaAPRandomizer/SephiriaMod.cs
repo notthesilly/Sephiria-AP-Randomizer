@@ -48,7 +48,20 @@ namespace SephiriaAPRandomizer
         private const string ArchipelagoShrineLocationPrefix = "Archipelago Shrine Check ";
         private const string ArchipelagoSephiriteEligibleCountKey = "ArchipelagoSephiriteEligibleCount";
         private const string ArchipelagoSephiriteAssignmentPrefix = "ArchipelagoSephiriteAssignment_";
+        private const string ArchipelagoSephiriteChoiceCountPrefix = "ArchipelagoSephiriteChoiceCount_";
+        private const string ArchipelagoSephiriteChoiceLocationPrefix = "ArchipelagoSephiriteChoiceLocation_";
+        private const string ArchipelagoSephiriteChoicesSavedPrefix = "ArchipelagoSephiriteChoicesSaved_";
+        private const string ArchipelagoSephiriteClaimedPrefix = "ArchipelagoSephiriteClaimed_";
+        private const string ArchipelagoSephiritePendingClaimPrefix = "ArchipelagoSephiritePendingClaim_";
+        private static readonly HashSet<int> activeArchipelagoSephiriteRuntimeInstances = new HashSet<int>();
+        private static readonly HashSet<int> blockedArchipelagoSephiriteRuntimeInstances = new HashSet<int>();
+        private static readonly Dictionary<int, long> archipelagoSephiriteLocationByRewardInstanceId = new Dictionary<int, long>();
+        private static readonly Dictionary<int, string> archipelagoSephiriteLocationNameByRewardInstanceId = new Dictionary<int, string>();
         private static readonly Dictionary<int, string> archipelagoSephiriteRuntimeIdentities = new Dictionary<int, string>();
+        private static readonly FieldInfo sephiriteRerollButtonGroupField = AccessTools.Field(typeof(UI_SephiriteRewardPanel), "rerollButtonGroup");
+        private static readonly FieldInfo sephiriteSkipSelectButtonGroupField = AccessTools.Field(typeof(UI_SephiriteRewardPanel), "skipSelectButtonGroup");
+        private static readonly FieldInfo sephiriteConvertRerollDiceButtonGroupField = AccessTools.Field(typeof(UI_SephiriteRewardPanel), "convertRerollDiceButtonGroup");
+        private static readonly FieldInfo sephiriteSelectSoundField = AccessTools.Field(typeof(UI_SephiriteRewardPanel), "selectSound");
         private static readonly System.Random archipelagoShrineCheckRandom = new System.Random();
         private static int hiddenRoomRewardAttemptsThisRun;
         private static UnityEngine.Sprite archipelagoShrineSprite;
@@ -657,6 +670,718 @@ namespace SephiriaAPRandomizer
             return true;
         }
 
+        private static bool TryGetArchipelagoSephiriteRuntimeIdentity(
+            Sephirite sephirite,
+            out string identity)
+        {
+            identity = null;
+
+            if (sephirite == null)
+                return false;
+
+            return archipelagoSephiriteRuntimeIdentities.TryGetValue(
+                sephirite.GetInstanceID(),
+                out identity
+            );
+        }
+
+
+        public static bool IsActiveArchipelagoSephirite(
+            Sephirite sephirite)
+        {
+            if (!IsArchipelagoSave)
+                return false;
+
+            if (sephirite == null)
+                return false;
+
+            return activeArchipelagoSephiriteRuntimeInstances.Contains(
+                sephirite.GetInstanceID()
+            );
+        }
+
+        public static bool IsBlockedArchipelagoSephirite(
+            Sephirite sephirite)
+        {
+            if (!IsArchipelagoSave)
+                return false;
+
+            if (sephirite == null)
+                return false;
+
+            return blockedArchipelagoSephiriteRuntimeInstances.Contains(
+                sephirite.GetInstanceID()
+            );
+        }
+
+        public static bool WasArchipelagoSephiriteClaimed(
+            Sephirite sephirite)
+        {
+            if (SaveManager.CurrentRun == null)
+                return false;
+
+            string identity;
+
+            if (!TryGetArchipelagoSephiriteRuntimeIdentity(
+                    sephirite,
+                    out identity))
+            {
+                return false;
+            }
+
+            return SaveManager.CurrentRun.GetBool(
+                ArchipelagoSephiriteClaimedPrefix +
+                identity,
+                false
+            );
+        }
+
+        public static bool MarkArchipelagoSephiriteClaimed(
+            Sephirite sephirite)
+        {
+            if (SaveManager.CurrentRun == null)
+                return false;
+
+            string identity;
+
+            if (!TryGetArchipelagoSephiriteRuntimeIdentity(
+                    sephirite,
+                    out identity))
+            {
+                return false;
+            }
+
+            SaveManager.CurrentRun.SetBool(
+                ArchipelagoSephiriteClaimedPrefix +
+                identity,
+                true
+            );
+
+            SaveManager.Save(
+                saveCurrent: false,
+                saveCurrentRun: true
+            );
+
+            MelonLogger.Msg(
+                $"[AP Sephirite] Marked claimed: {identity}."
+            );
+
+            return true;
+        }
+
+        public static bool SetArchipelagoSephiritePendingClaim(
+            Sephirite sephirite,
+            long locationId)
+        {
+            if (SaveManager.CurrentRun == null)
+                return false;
+
+            string identity;
+
+            if (!TryGetArchipelagoSephiriteRuntimeIdentity(
+                    sephirite,
+                    out identity))
+            {
+                return false;
+            }
+
+            SaveManager.CurrentRun.SetString(
+                ArchipelagoSephiritePendingClaimPrefix +
+                identity,
+                locationId.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture
+                )
+            );
+
+            SaveManager.Save(
+                saveCurrent: false,
+                saveCurrentRun: true
+            );
+
+            MelonLogger.Msg(
+                $"[AP Sephirite] Pending claim saved: " +
+                $"{identity} -> {locationId}."
+            );
+
+            return true;
+        }
+
+        public static bool TryGetArchipelagoSephiritePendingClaim(
+            Sephirite sephirite,
+            out long locationId)
+        {
+            locationId = 0;
+
+            if (SaveManager.CurrentRun == null)
+                return false;
+
+            string identity;
+
+            if (!TryGetArchipelagoSephiriteRuntimeIdentity(
+                    sephirite,
+                    out identity))
+            {
+                return false;
+            }
+
+            string locationIdText =
+                SaveManager.CurrentRun.GetString(
+                    ArchipelagoSephiritePendingClaimPrefix +
+                    identity,
+                    ""
+                );
+
+            if (string.IsNullOrEmpty(locationIdText))
+                return false;
+
+            return long.TryParse(
+                locationIdText,
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out locationId
+            );
+        }
+
+        private static bool HasArchipelagoSephiritePendingClaimData(
+            Sephirite sephirite)
+        {
+            if (sephirite == null)
+                return false;
+
+            if (SaveManager.CurrentRun == null)
+                return false;
+
+            string identity;
+
+            if (!TryGetArchipelagoSephiriteRuntimeIdentity(
+                    sephirite,
+                    out identity))
+            {
+                return false;
+            }
+
+            string locationIdText =
+                SaveManager.CurrentRun.GetString(
+                    ArchipelagoSephiritePendingClaimPrefix +
+                    identity,
+                    ""
+                );
+
+            return !string.IsNullOrEmpty(locationIdText);
+        }
+
+        public static void ClearArchipelagoSephiritePendingClaim(
+            Sephirite sephirite)
+        {
+            if (SaveManager.CurrentRun == null)
+                return;
+
+            string identity;
+
+            if (!TryGetArchipelagoSephiriteRuntimeIdentity(
+                    sephirite,
+                    out identity))
+            {
+                return;
+            }
+
+            SaveManager.CurrentRun.SetString(
+                ArchipelagoSephiritePendingClaimPrefix +
+                identity,
+                ""
+            );
+
+            SaveManager.Save(
+                saveCurrent: false,
+                saveCurrentRun: true
+            );
+        }
+
+        public static bool TryResolveArchipelagoSephiritePendingClaim(
+            Sephirite sephirite,
+            out bool resolvedAsClaimed)
+        {
+            resolvedAsClaimed = false;
+
+            if (sephirite == null)
+                return false;
+
+            bool hasPendingClaimData =
+                HasArchipelagoSephiritePendingClaimData(
+                    sephirite
+                );
+
+            // No saved Pending value means there is no
+            // interrupted transaction to recover.
+            if (!hasPendingClaimData)
+                return true;
+
+            long pendingLocationId;
+
+            if (!TryGetArchipelagoSephiritePendingClaim(
+                    sephirite,
+                    out pendingLocationId))
+            {
+                blockedArchipelagoSephiriteRuntimeInstances.Add(
+                    sephirite.GetInstanceID()
+                );
+
+                MelonLogger.Error(
+                    "[AP Sephirite] Pending claim data exists, " +
+                    "but its location ID is invalid. " +
+                    "This Sephirite has been blocked."
+                );
+
+                return false;
+            }
+
+            bool pendingIsSavedChoice;
+
+            if (!TryIsSavedArchipelagoSephiriteChoice(
+                    sephirite,
+                    pendingLocationId,
+                    out pendingIsSavedChoice))
+            {
+                blockedArchipelagoSephiriteRuntimeInstances.Add(
+                    sephirite.GetInstanceID()
+                );
+
+                MelonLogger.Error(
+                    "[AP Sephirite] Pending claim could not " +
+                    "be verified against the saved choices. " +
+                    "This Sephirite has been blocked."
+                );
+
+                return false;
+            }
+
+            if (!pendingIsSavedChoice)
+            {
+                blockedArchipelagoSephiriteRuntimeInstances.Add(
+                    sephirite.GetInstanceID()
+                );
+
+                MelonLogger.Error(
+                    "[AP Sephirite] Pending location " +
+                    $"{pendingLocationId} was not one of this " +
+                    "Sephirite's saved choices. " +
+                    "This Sephirite has been blocked."
+                );
+
+                return false;
+            }
+
+            ArchipelagoSession apSession =
+                session as ArchipelagoSession;
+
+            if (apSession == null ||
+                !apSession.Socket.Connected)
+            {
+                MelonLogger.Warning(
+                    "[AP Sephirite] Cannot reconcile pending " +
+                    "claim because Archipelago is not connected."
+                );
+
+                return false;
+            }
+
+            bool locationIsStillMissing =
+                apSession.Locations
+                    .AllMissingLocations
+                    .Contains(pendingLocationId);
+
+            if (locationIsStillMissing)
+            {
+                // The AP server still says this location is
+                // unchecked, so the interrupted claim did
+                // not successfully complete.
+                ClearArchipelagoSephiritePendingClaim(
+                    sephirite
+                );
+
+                MelonLogger.Msg(
+                    $"[AP Sephirite] Pending location " +
+                    $"{pendingLocationId} is still missing. " +
+                    "Pending state cleared; reward may be retried."
+                );
+
+                return true;
+            }
+
+            // The location is no longer missing, so the AP
+            // server already received the check.
+            if (!MarkArchipelagoSephiriteClaimed(
+                    sephirite))
+            {
+                MelonLogger.Error(
+                    "[AP Sephirite] Pending location was already " +
+                    "checked, but Claimed state could not be saved."
+                );
+
+                // Keep Pending intact so recovery can be
+                // attempted again later.
+                return false;
+            }
+
+            ClearArchipelagoSephiritePendingClaim(
+                sephirite
+            );
+
+            resolvedAsClaimed = true;
+
+            MelonLogger.Msg(
+                $"[AP Sephirite] Recovered completed pending " +
+                $"claim {pendingLocationId}. Sephirite is claimed."
+            );
+
+            return true;
+        }
+
+        private static bool SaveArchipelagoSephiriteChoices(
+            Sephirite sephirite,
+            List<long> selectedLocations)
+        {
+            if (sephirite == null)
+                return false;
+
+            if (selectedLocations == null ||
+                selectedLocations.Count == 0)
+            {
+                return false;
+            }
+
+            if (SaveManager.CurrentRun == null)
+                return false;
+
+            string identity;
+
+            if (!TryGetArchipelagoSephiriteRuntimeIdentity(
+                    sephirite,
+                    out identity))
+            {
+                return false;
+            }
+
+            SaveManager.CurrentRun.SetInt(
+                ArchipelagoSephiriteChoiceCountPrefix +
+                identity,
+                selectedLocations.Count
+            );
+
+            for (int i = 0;
+                 i < selectedLocations.Count;
+                 i++)
+            {
+                string locationKey =
+                    ArchipelagoSephiriteChoiceLocationPrefix +
+                    identity +
+                    "_" +
+                    i;
+
+                SaveManager.CurrentRun.SetString(
+                    locationKey,
+                    selectedLocations[i].ToString(
+                        System.Globalization.CultureInfo.InvariantCulture
+                    )
+                );
+            }
+
+            SaveManager.CurrentRun.SetBool(
+                ArchipelagoSephiriteChoicesSavedPrefix +
+                identity,
+                true
+            );
+
+            SaveManager.Save(
+                saveCurrent: false,
+                saveCurrentRun: true
+            );
+
+            MelonLogger.Msg(
+                $"[AP Sephirite] Persisted " +
+                $"{selectedLocations.Count} choices for " +
+                $"{identity}."
+            );
+
+            return true;
+        }
+
+        private static bool HasSavedArchipelagoSephiriteChoices(
+            Sephirite sephirite)
+        {
+            if (sephirite == null)
+                return false;
+
+            if (SaveManager.CurrentRun == null)
+                return false;
+
+            string identity;
+
+            if (!TryGetArchipelagoSephiriteRuntimeIdentity(
+                    sephirite,
+                    out identity))
+            {
+                return false;
+            }
+
+            bool choicesSaved =
+                SaveManager.CurrentRun.GetBool(
+                    ArchipelagoSephiriteChoicesSavedPrefix +
+                    identity,
+                    false
+                );
+
+            if (choicesSaved)
+                return true;
+
+            // Compatibility with Sephirites whose choices were
+            // persisted before ChoicesSaved was introduced.
+            int legacySavedChoiceCount =
+                SaveManager.CurrentRun.GetInt(
+                    ArchipelagoSephiriteChoiceCountPrefix +
+                    identity,
+                    0
+                );
+
+            return legacySavedChoiceCount > 0;
+        }
+
+        private static bool TryIsSavedArchipelagoSephiriteChoice(
+            Sephirite sephirite,
+            long locationId,
+            out bool isSavedChoice)
+        {
+            isSavedChoice = false;
+
+            if (sephirite == null)
+                return false;
+
+            if (SaveManager.CurrentRun == null)
+                return false;
+
+            string identity;
+
+            if (!TryGetArchipelagoSephiriteRuntimeIdentity(
+                    sephirite,
+                    out identity))
+            {
+                return false;
+            }
+
+            int savedChoiceCount =
+                SaveManager.CurrentRun.GetInt(
+                    ArchipelagoSephiriteChoiceCountPrefix +
+                    identity,
+                    0
+                );
+
+            if (savedChoiceCount <= 0)
+                return false;
+
+            for (int i = 0;
+                 i < savedChoiceCount;
+                 i++)
+            {
+                string locationKey =
+                    ArchipelagoSephiriteChoiceLocationPrefix +
+                    identity +
+                    "_" +
+                    i;
+
+                string savedLocationText =
+                    SaveManager.CurrentRun.GetString(
+                        locationKey,
+                        ""
+                    );
+
+                long savedLocationId;
+
+                if (!long.TryParse(
+                        savedLocationText,
+                        System.Globalization.NumberStyles.Integer,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out savedLocationId))
+                {
+                    return false;
+                }
+
+                if (savedLocationId == locationId)
+                {
+                    isSavedChoice = true;
+                    return true;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool TryLoadSavedArchipelagoSephiriteChoices(
+            Sephirite sephirite,
+            ArchipelagoSession apSession,
+            string poolName,
+            out List<long> selectedLocations,
+            out List<string> locationNames)
+        {
+            selectedLocations = new List<long>();
+            locationNames = new List<string>();
+
+            if (sephirite == null ||
+                apSession == null ||
+                SaveManager.CurrentRun == null)
+            {
+                return false;
+            }
+
+            string identity;
+
+            if (!TryGetArchipelagoSephiriteRuntimeIdentity(
+                    sephirite,
+                    out identity))
+            {
+                return false;
+            }
+
+            int savedChoiceCount =
+                SaveManager.CurrentRun.GetInt(
+                    ArchipelagoSephiriteChoiceCountPrefix +
+                    identity,
+                    0
+                );
+
+            // No saved choices means this Sephirite has
+            // never had its AP choices generated before.
+            if (savedChoiceCount <= 0)
+            {
+                if (HasSavedArchipelagoSephiriteChoices(
+                        sephirite))
+                {
+                    MelonLogger.Error(
+                        "[AP Sephirite] Saved-choice marker exists, " +
+                        "but the saved choice count is invalid."
+                    );
+                }
+
+                return false;
+            }
+
+            for (int i = 0;
+                 i < savedChoiceCount;
+                 i++)
+            {
+                string locationKey =
+                    ArchipelagoSephiriteChoiceLocationPrefix +
+                    identity +
+                    "_" +
+                    i;
+
+                string locationIdText =
+                    SaveManager.CurrentRun.GetString(
+                        locationKey,
+                        ""
+                    );
+
+                long locationId;
+
+                if (!long.TryParse(
+                        locationIdText,
+                        System.Globalization.NumberStyles.Integer,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out locationId))
+                {
+                    MelonLogger.Warning(
+                        "[AP Sephirite] Could not restore " +
+                        $"saved choice #{i} for {identity}."
+                    );
+
+                    selectedLocations.Clear();
+                    locationNames.Clear();
+
+                    return false;
+                }
+
+                string locationName =
+                    apSession.Locations
+                        .GetLocationNameFromId(
+                            locationId,
+                            "Sephiria"
+                        );
+
+                if (string.IsNullOrEmpty(locationName))
+                {
+                    MelonLogger.Warning(
+                        "[AP Sephirite] Saved location " +
+                        $"{locationId} could not be resolved."
+                    );
+
+                    selectedLocations.Clear();
+                    locationNames.Clear();
+
+                    return false;
+                }
+
+                string expectedPrefix =
+                    poolName + " Sephirite Item ";
+
+                if (!locationName.StartsWith(
+                        expectedPrefix,
+                        StringComparison.Ordinal))
+                {
+                    MelonLogger.Error(
+                        "[AP Sephirite] Saved location " +
+                        $"{locationName} does not belong to " +
+                        $"the expected pool {poolName}."
+                    );
+
+                    selectedLocations.Clear();
+                    locationNames.Clear();
+
+                    return false;
+                }
+
+                bool isStillMissing =
+                    apSession.Locations
+                        .AllMissingLocations
+                        .Contains(locationId);
+
+                if (!isStillMissing)
+                {
+                    MelonLogger.Msg(
+                        $"[AP Sephirite] Saved choice " +
+                        $"{locationId} is already checked. " +
+                        "It will not be replaced."
+                    );
+
+                    continue;
+                }
+
+                selectedLocations.Add(locationId);
+                locationNames.Add(locationName);
+            }
+
+            if (sephirite.Rewards.Count <
+                selectedLocations.Count)
+            {
+                MelonLogger.Warning(
+                    "[AP Sephirite] Not enough regenerated " +
+                    "reward shells exist for the remaining " +
+                    "saved AP choices."
+                );
+
+                selectedLocations.Clear();
+                locationNames.Clear();
+
+                return false;
+            }
+
+            MelonLogger.Msg(
+                $"[AP Sephirite] Restored " +
+                $"{selectedLocations.Count} saved choices " +
+                $"for {identity}."
+            );
+
+            return true;
+        }
+
         private static bool TryGetArchipelagoSephiritePool(
             GameObject actor,
             out int stageProgress,
@@ -765,19 +1490,19 @@ namespace SephiriaAPRandomizer
                 .ToList();
         }
 
-
-        public static bool
-            TryGetArchipelagoSephiritePreviewChoices(
-                GameObject actor,
-                int normalChoiceCount,
-                int seed,
-                out int stageProgress,
-                out string poolName,
-                out List<string> locationNames)
+        public static bool TryPrepareArchipelagoSephiriteChoices(
+            Sephirite sephirite,
+            GameObject actor,
+            out int stageProgress,
+            out string poolName,
+            out List<string> locationNames)
         {
             stageProgress = -1;
             poolName = null;
             locationNames = new List<string>();
+
+            if (sephirite == null)
+                return false;
 
             ArchipelagoSession apSession =
                 session as ArchipelagoSession;
@@ -796,57 +1521,431 @@ namespace SephiriaAPRandomizer
                 return false;
             }
 
-            List<long> missingChecks =
-                GetMissingArchipelagoSephiriteChecks(
+            List<long> selectedLocations;
+            List<string> restoredLocationNames;
+
+            bool hasSavedChoices =
+                HasSavedArchipelagoSephiriteChoices(
+                    sephirite
+                );
+
+            bool restoredSavedChoices =
+                TryLoadSavedArchipelagoSephiriteChoices(
+                    sephirite,
                     apSession,
-                    poolName
+                    poolName,
+                    out selectedLocations,
+                    out restoredLocationNames
                 );
 
-            // This is valid. It means this floor's AP
-            // Sephirite pool has already been exhausted.
-            if (missingChecks.Count == 0)
+            if (hasSavedChoices &&
+                !restoredSavedChoices)
+            {
+                blockedArchipelagoSephiriteRuntimeInstances.Add(
+                    sephirite.GetInstanceID()
+                );
+
+                MelonLogger.Error(
+                    "[AP Sephirite] Saved AP choices exist, " +
+                    "but they could not be restored. " +
+                    "This Sephirite has been blocked."
+                );
+
                 return true;
+            }
 
-            int amountToShow =
-                Math.Min(
-                    normalChoiceCount,
-                    missingChecks.Count
+            int amountToShow;
+
+            if (restoredSavedChoices)
+            {
+                blockedArchipelagoSephiriteRuntimeInstances.Remove(
+                    sephirite.GetInstanceID()
                 );
 
-            List<long> available =
-                new List<long>(missingChecks);
+                locationNames = restoredLocationNames;
 
-            System.Random random =
-                new System.Random(
-                    unchecked(seed ^ 0x41A7B9)
+                amountToShow =
+                    selectedLocations.Count;
+
+                if (amountToShow == 0)
+                {
+                    MelonLogger.Msg(
+                        "[AP Sephirite] All saved choices are " +
+                        "already checked. Resolving this " +
+                        "Sephirite without another reward."
+                    );
+
+                    int resolvedRuntimeInstanceId =
+                        sephirite.GetInstanceID();
+
+                    if (!MarkArchipelagoSephiriteClaimed(
+                            sephirite))
+                    {
+                        blockedArchipelagoSephiriteRuntimeInstances.Add(
+                            resolvedRuntimeInstanceId
+                        );
+
+                        MelonLogger.Error(
+                            "[AP Sephirite] All saved choices are " +
+                            "already checked, but Claimed state " +
+                            "could not be persisted. " +
+                            "This Sephirite has been blocked."
+                        );
+
+                        return true;
+                    }
+
+                    blockedArchipelagoSephiriteRuntimeInstances.Remove(
+                        resolvedRuntimeInstanceId
+                    );
+
+                    activeArchipelagoSephiriteRuntimeInstances.Add(
+                        resolvedRuntimeInstanceId
+                    );
+
+                    return true;
+                }
+            }
+            else
+            {
+                // First time this Sephirite has received
+                // AP choices.
+                List<long> missingChecks =
+                    GetMissingArchipelagoSephiriteChecks(
+                        apSession,
+                        poolName
+                    );
+
+                // AP position still consumes its position in the
+                // sequence, but becomes vanilla if this floor's
+                // AP pool is exhausted.
+                if (missingChecks.Count == 0)
+                {
+                    int vanillaRuntimeInstanceId =
+                        sephirite.GetInstanceID();
+
+                    activeArchipelagoSephiriteRuntimeInstances.Remove(
+                        vanillaRuntimeInstanceId
+                    );
+
+                    blockedArchipelagoSephiriteRuntimeInstances.Remove(
+                        vanillaRuntimeInstanceId
+                    );
+
+                    return true;
+                }
+
+                amountToShow =
+                    Math.Min(
+                        sephirite.Rewards.Count,
+                        missingChecks.Count
+                    );
+
+                if (amountToShow <= 0)
+                {
+                    int vanillaRuntimeInstanceId =
+                        sephirite.GetInstanceID();
+
+                    activeArchipelagoSephiriteRuntimeInstances.Remove(
+                        vanillaRuntimeInstanceId
+                    );
+
+                    blockedArchipelagoSephiriteRuntimeInstances.Remove(
+                        vanillaRuntimeInstanceId
+                    );
+
+                    return true;
+                }
+
+                // Sort first so the seeded selection is stable.
+                List<long> available =
+                    missingChecks
+                        .OrderBy(locationId => locationId)
+                        .ToList();
+
+                selectedLocations =
+                    new List<long>();
+
+                System.Random random =
+                    new System.Random(
+                        unchecked(
+                            sephirite.CurrentSeed ^
+                            0x41A7B9
+                        )
+                    );
+
+                for (int i = 0;
+                     i < amountToShow;
+                     i++)
+                {
+                    int randomIndex =
+                        random.Next(
+                            0,
+                            available.Count
+                        );
+
+                    long locationId =
+                        available[randomIndex];
+
+                    available.RemoveAt(randomIndex);
+                    selectedLocations.Add(locationId);
+
+                    string locationName =
+                        apSession.Locations
+                            .GetLocationNameFromId(
+                                locationId,
+                                "Sephiria"
+                            );
+
+                    locationNames.Add(locationName);
+                }
+
+                if (!SaveArchipelagoSephiriteChoices(
+                    sephirite,
+                    selectedLocations))
+                {
+                    blockedArchipelagoSephiriteRuntimeInstances.Add(
+                        sephirite.GetInstanceID()
+                    );
+
+                    MelonLogger.Error(
+                        "[AP Sephirite] Failed to persist " +
+                        "new AP reward choices. " +
+                        "This Sephirite has been blocked."
+                    );
+
+                    return true;
+                }
+
+                blockedArchipelagoSephiriteRuntimeInstances.Remove(
+                    sephirite.GetInstanceID()
                 );
+            }
 
+            // Remove extra vanilla shell choices.
+            //
+            // Example:
+            // 5 normal choices, only 2 AP checks left
+            // -> Sephirite now contains exactly 2 choices.
+            while (sephirite.rewards.Count >
+                   amountToShow)
+            {
+                sephirite.rewards.RemoveAt(
+                    sephirite.rewards.Count - 1
+                );
+            }
+
+            int runtimeInstanceId =
+                sephirite.GetInstanceID();
+
+            activeArchipelagoSephiriteRuntimeInstances.Add(
+                runtimeInstanceId
+            );
+
+            // Each remaining vanilla reward metadata object is
+            // only a shell. Associate it with an AP location.
             for (int i = 0;
                  i < amountToShow;
                  i++)
             {
-                int randomIndex =
-                    random.Next(
-                        0,
-                        available.Count
-                    );
+                int rewardInstanceId =
+                    sephirite.rewards[i].instanceID;
 
                 long locationId =
-                    available[randomIndex];
+                    selectedLocations[i];
 
-                available.RemoveAt(randomIndex);
+                archipelagoSephiriteLocationByRewardInstanceId[
+                    rewardInstanceId
+                ] = locationId;
 
-                string locationName =
-                    apSession.Locations
-                        .GetLocationNameFromId(
-                            locationId,
-                            "Sephiria"
-                        );
-
-                locationNames.Add(locationName);
+                archipelagoSephiriteLocationNameByRewardInstanceId[
+                    rewardInstanceId
+                ] = locationNames[i];
             }
 
             return true;
+        }
+
+        public static bool TryGetArchipelagoSephiriteChoice(
+            int rewardInstanceId,
+            out long locationId,
+            out string locationName)
+        {
+            locationId = 0;
+            locationName = null;
+
+            if (!archipelagoSephiriteLocationByRewardInstanceId
+                    .TryGetValue(
+                        rewardInstanceId,
+                        out locationId))
+            {
+                return false;
+            }
+
+            archipelagoSephiriteLocationNameByRewardInstanceId
+                .TryGetValue(
+                    rewardInstanceId,
+                    out locationName
+                );
+
+            return true;
+        }
+
+
+        public static bool TryCompleteArchipelagoSephiriteChoice(
+            int rewardInstanceId,
+            out string locationName)
+        {
+            locationName = null;
+
+            long locationId;
+
+            if (!TryGetArchipelagoSephiriteChoice(
+                    rewardInstanceId,
+                    out locationId,
+                    out locationName))
+            {
+                return false;
+            }
+
+            ArchipelagoSession apSession =
+                session as ArchipelagoSession;
+
+            if (apSession == null ||
+                !apSession.Socket.Connected)
+            {
+                MelonLogger.Warning(
+                    "[AP Sephirite] Cannot complete choice: " +
+                    "Archipelago is not connected."
+                );
+
+                return false;
+            }
+
+            try
+            {
+                apSession.Locations.CompleteLocationChecks(
+                    locationId
+                );
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Error(
+                    "[AP Sephirite] Failed to complete " +
+                    "location check: " +
+                    ex.Message
+                );
+
+                return false;
+            }
+
+            MelonLogger.Msg(
+                $"[AP Sephirite] Checked {locationName}."
+            );
+
+            return true;
+        }
+
+
+        public static void ClearArchipelagoSephiriteRuntimeState(
+            Sephirite sephirite)
+        {
+            if (sephirite == null)
+                return;
+
+            int runtimeInstanceId =
+                sephirite.GetInstanceID();
+
+            foreach (SephiriteRewardMetadata reward
+                in sephirite.Rewards)
+            {
+                archipelagoSephiriteLocationByRewardInstanceId
+                    .Remove(reward.instanceID);
+
+                archipelagoSephiriteLocationNameByRewardInstanceId
+                    .Remove(reward.instanceID);
+            }
+
+            activeArchipelagoSephiriteRuntimeInstances.Remove(
+                runtimeInstanceId
+            );
+
+            blockedArchipelagoSephiriteRuntimeInstances.Remove(
+                runtimeInstanceId
+            );
+
+            archipelagoSephiriteRuntimeIdentities.Remove(
+                runtimeInstanceId
+            );
+        }
+
+        public static void PlayArchipelagoSephiriteSelectSound(
+            UI_SephiriteRewardPanel panel)
+        {
+            if (panel == null ||
+                sephiriteSelectSoundField == null)
+            {
+                return;
+            }
+
+            object sound =
+                sephiriteSelectSoundField.GetValue(panel);
+
+            if (sound == null)
+                return;
+
+            MethodInfo playMethod =
+                AccessTools.Method(
+                    sound.GetType(),
+                    "Play"
+                );
+
+            if (playMethod == null)
+                return;
+
+            playMethod.Invoke(
+                sound,
+                null
+            );
+        }
+
+        public static void RestoreVanillaSephiritePanelControls(
+            UI_SephiriteRewardPanel panel,
+            PlayerAvatar openedAvatar)
+        {
+            if (panel == null ||
+                openedAvatar == null)
+            {
+                return;
+            }
+
+            SetSephiritePanelGroupActive(
+                panel,
+                sephiriteRerollButtonGroupField,
+                true
+            );
+
+            bool canConvertToDice =
+                openedAvatar.GetCustomStat(
+                    ECustomStat.GiveUpRewardDice
+                ) > 0;
+
+            SetSephiritePanelGroupActive(
+                panel,
+                sephiriteConvertRerollDiceButtonGroupField,
+                canConvertToDice
+            );
+
+            SetSephiritePanelGroupActive(
+                panel,
+                sephiriteSkipSelectButtonGroupField,
+                !canConvertToDice
+            );
+
+            if (panel.skipGuide != null)
+            {
+                panel.skipGuide.SetActive(false);
+            }
         }
 
         // Hardmode Stuff
@@ -923,6 +2022,10 @@ namespace SephiriaAPRandomizer
             completedWeaponTypes.Clear();
 
             archipelagoSephiriteRuntimeIdentities.Clear();
+            activeArchipelagoSephiriteRuntimeInstances.Clear();
+            blockedArchipelagoSephiriteRuntimeInstances.Clear();
+            archipelagoSephiriteLocationByRewardInstanceId.Clear();
+            archipelagoSephiriteLocationNameByRewardInstanceId.Clear();
 
             ResetArchipelagoShrineRunState();
 
@@ -1083,6 +2186,30 @@ namespace SephiriaAPRandomizer
             hardModeSyncPending = true;
         }
 
+        private static void SetSephiritePanelGroupActive(
+            UI_SephiriteRewardPanel panel,
+            FieldInfo field,
+            bool active)
+        {
+            if (panel == null ||
+                field == null)
+            {
+                return;
+            }
+
+            UnityEngine.Component component =
+                field.GetValue(panel)
+                    as UnityEngine.Component;
+
+            if (component == null)
+                return;
+
+            if (component.gameObject.activeSelf != active)
+            {
+                component.gameObject.SetActive(active);
+            }
+        }
+
         public override void OnUpdate()
         {
             if (IsArchipelagoSave)
@@ -1118,6 +2245,49 @@ namespace SephiriaAPRandomizer
                 }
 
                 wasArchipelagoConnected = connected;
+            }
+
+            if (IsArchipelagoSave &&
+                UIManager.Instance != null)
+            {
+                UI_SephiriteRewardPanel panel =
+                    UIManager.Instance
+                        .GetElement<UI_SephiriteRewardPanel>();
+
+                if (panel != null &&
+                    panel.sephirite != null &&
+                    (
+                        IsActiveArchipelagoSephirite(
+                            panel.sephirite
+                        ) ||
+                        IsBlockedArchipelagoSephirite(
+                            panel.sephirite
+                        )
+                    ))
+                {
+                    SetSephiritePanelGroupActive(
+                        panel,
+                        sephiriteRerollButtonGroupField,
+                        false
+                    );
+
+                    SetSephiritePanelGroupActive(
+                        panel,
+                        sephiriteSkipSelectButtonGroupField,
+                        false
+                    );
+
+                    SetSephiritePanelGroupActive(
+                        panel,
+                        sephiriteConvertRerollDiceButtonGroupField,
+                        false
+                    );
+
+                    if (panel.skipGuide != null)
+                    {
+                        panel.skipGuide.SetActive(false);
+                    }
+                }
             }
 
             if (!hardModeSyncPending)
@@ -3302,7 +4472,7 @@ public static class ArchipelagoShrineStartClientPatch
     typeof(Sephirite),
     nameof(Sephirite.GenerateItems)
 )]
-public static class ArchipelagoSephiriteDebugPatch
+public static class ArchipelagoSephiriteGeneratePatch
 {
     public static void Postfix(
         Sephirite __instance,
@@ -3371,16 +4541,17 @@ public static class ArchipelagoSephiriteDebugPatch
             return;
         }
 
+        int normalChoiceCount = __instance.Rewards.Count;
+
         int stageProgress;
         string poolName;
         List<string> locationNames;
 
         bool foundPool =
             SephiriaMod
-                .TryGetArchipelagoSephiritePreviewChoices(
+                .TryPrepareArchipelagoSephiriteChoices(
+                    __instance,
                     actor,
-                    __instance.Rewards.Count,
-                    __instance.CurrentSeed,
                     out stageProgress,
                     out poolName,
                     out locationNames
@@ -3393,6 +4564,29 @@ public static class ArchipelagoSephiriteDebugPatch
                 $"#{eligibleNumber} was an AP position, " +
                 "but the current floor pool could not " +
                 "be determined. Leaving vanilla."
+            );
+
+            return;
+        }
+
+        if (SephiriaMod.IsBlockedArchipelagoSephirite(
+            __instance))
+        {
+            MelonLogger.Error(
+                $"[AP Sephirite] Eligible " +
+                $"#{eligibleNumber} is blocked because " +
+                "its AP reward state could not be restored safely."
+            );
+
+            return;
+        }
+
+        if (SephiriaMod.WasArchipelagoSephiriteClaimed( __instance))
+        {
+            MelonLogger.Msg(
+                $"[AP Sephirite] Eligible " +
+                $"#{eligibleNumber} was already resolved. " +
+                "It will be consumed without another reward."
             );
 
             return;
@@ -3422,7 +4616,7 @@ public static class ArchipelagoSephiriteDebugPatch
             $"[AP Sephirite] " +
             $"StageProgress={stageProgress}, " +
             $"Pool={poolName}, " +
-            $"NormalChoices={__instance.Rewards.Count}, " +
+            $"NormalChoices={normalChoiceCount}, " +
             $"APChoices={locationNames.Count}"
         );
 
@@ -3433,5 +4627,563 @@ public static class ArchipelagoSephiriteDebugPatch
                 locationName
             );
         }
+    }
+}
+
+[HarmonyPatch(
+    typeof(PlayerAvatar),
+    nameof(PlayerAvatar.AcquireSephiriteReward)
+)]
+public static class ArchipelagoSephiriteOpenPatch
+{
+    public static bool Prefix(
+        PlayerAvatar __instance,
+        Sephirite sephiriteInstance)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        if (SephiriaMod.IsBlockedArchipelagoSephirite(
+                sephiriteInstance))
+        {
+            MelonLogger.Error(
+                "[AP Sephirite] Blocked Sephirite tried to open. " +
+                "Reward UI was prevented from opening."
+            );
+
+            if (UIManager.Instance != null)
+            {
+                UIManager.Instance
+                    .GetElement<UI_SystemMessage>()
+                    .Open(
+                        "This Archipelago reward could not be restored safely.",
+                        4f
+                    );
+            }
+
+            return false;
+        }
+
+        if (!SephiriaMod.IsActiveArchipelagoSephirite(
+                sephiriteInstance))
+        {
+            return true;
+        }
+
+        bool pendingResolvedAsClaimed;
+
+        if (!SephiriaMod
+                .TryResolveArchipelagoSephiritePendingClaim(
+                    sephiriteInstance,
+                    out pendingResolvedAsClaimed))
+        {
+            MelonLogger.Warning(
+                "[AP Sephirite] Could not safely resolve " +
+                "pending reward state. Reward UI was blocked."
+            );
+
+            return false;
+        }
+
+        if (pendingResolvedAsClaimed ||
+            SephiriaMod.WasArchipelagoSephiriteClaimed(
+                sephiriteInstance))
+        {
+            MelonLogger.Msg(
+                "[AP Sephirite] Previously claimed AP " +
+                "Sephirite was reconstructed. " +
+                "Consuming without another reward."
+            );
+
+            __instance.SelectSephiriteReward(
+                sephiriteInstance,
+                -1,
+                new ItemPosition(-1, -1)
+            );
+
+            return false;
+        }
+
+        return true;
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_SephiriteRewardPanel),
+    "HandleSephiriteUIReopen"
+)]
+public static class ArchipelagoQueuedSephiriteOpenPatch
+{
+    public static bool Prefix(
+        UI_SephiriteRewardPanel __instance,
+        Sephirite sephirite,
+        PlayerAvatar ___openedAvatar,
+        out bool __state)
+    {
+        __state = false;
+
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        if (sephirite == null)
+            return true;
+
+        if (SephiriaMod.IsBlockedArchipelagoSephirite(
+                sephirite))
+        {
+            MelonLogger.Error(
+                "[AP Sephirite] Blocked queued Sephirite " +
+                "tried to reopen. Reward UI was prevented."
+            );
+
+            if (UIManager.Instance != null)
+            {
+                UIManager.Instance
+                    .GetElement<UI_SystemMessage>()
+                    .Open(
+                        "This Archipelago reward could not be restored safely.",
+                        4f
+                    );
+            }
+
+            return false;
+        }
+
+        bool nextIsArchipelago =
+            SephiriaMod.IsActiveArchipelagoSephirite(
+                sephirite
+            );
+
+        __state = !nextIsArchipelago;
+
+        if (!nextIsArchipelago)
+            return true;
+
+        bool pendingResolvedAsClaimed;
+
+        if (!SephiriaMod
+                .TryResolveArchipelagoSephiritePendingClaim(
+                    sephirite,
+                    out pendingResolvedAsClaimed))
+        {
+            MelonLogger.Warning(
+                "[AP Sephirite] Could not safely resolve " +
+                "pending queued reward state. " +
+                "Reward UI was blocked."
+            );
+
+            return false;
+        }
+
+        if (pendingResolvedAsClaimed ||
+            SephiriaMod.WasArchipelagoSephiriteClaimed(
+                sephirite))
+        {
+            MelonLogger.Msg(
+                "[AP Sephirite] Previously claimed queued " +
+                "AP Sephirite was reconstructed. " +
+                "Consuming without another reward."
+            );
+
+            if (___openedAvatar != null)
+            {
+                ___openedAvatar.SelectSephiriteReward(
+                    sephirite,
+                    -1,
+                    new ItemPosition(-1, -1)
+                );
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    public static void Postfix(
+        UI_SephiriteRewardPanel __instance,
+        PlayerAvatar ___openedAvatar,
+        bool __state)
+    {
+        if (!__state)
+            return;
+
+        SephiriaMod.RestoreVanillaSephiritePanelControls(
+            __instance,
+            ___openedAvatar
+        );
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_SephiriteRewardPanel),
+    nameof(
+        UI_SephiriteRewardPanel
+            .AcquireSephiriteRewardByUIElement
+    )
+)]
+public static class ArchipelagoSephiriteClaimPatch
+{
+    public static bool Prefix(
+        UI_SephiriteRewardPanel __instance,
+        UI_SephiriteRewardElement rewardElement,
+        PlayerAvatar ___openedAvatar)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        if (rewardElement == null)
+            return true;
+
+        if (__instance == null ||
+            __instance.sephirite == null ||
+            ___openedAvatar == null)
+        {
+            MelonLogger.Warning(
+                "[AP Sephirite] Invalid reward UI state. " +
+                "AP check was not sent."
+            );
+
+            return false;
+        }
+
+        if (SephiriaMod.IsBlockedArchipelagoSephirite(
+            __instance.sephirite))
+        {
+            MelonLogger.Error(
+                "[AP Sephirite] Blocked Sephirite claim " +
+                "was prevented."
+            );
+
+            if (UIManager.Instance != null)
+            {
+                UIManager.Instance
+                    .GetElement<UI_SystemMessage>()
+                    .Open(
+                        "This Archipelago reward could not be restored safely.",
+                        4f
+                    );
+            }
+
+            return false;
+        }
+
+        long locationId;
+        string locationName;
+
+        if (!SephiriaMod
+                .TryGetArchipelagoSephiriteChoice(
+                    rewardElement.reward.instanceID,
+                    out locationId,
+                    out locationName))
+        {
+            return true;
+        }
+
+        // Persist what we are about to send BEFORE
+        // contacting the Archipelago server.
+        if (!SephiriaMod.SetArchipelagoSephiritePendingClaim(
+                __instance.sephirite,
+                locationId))
+        {
+            MelonLogger.Error(
+                "[AP Sephirite] Could not persist pending " +
+                "claim. AP check was not sent."
+            );
+
+            return false;
+        }
+
+        if (!SephiriaMod
+                .TryCompleteArchipelagoSephiriteChoice(
+                    rewardElement.reward.instanceID,
+                    out locationName))
+        {
+            // The AP check did not succeed, so this attempt
+            // is safe to retry.
+            SephiriaMod.ClearArchipelagoSephiritePendingClaim(
+                __instance.sephirite
+            );
+
+            UIManager.Instance
+                .GetElement<UI_SystemMessage>()
+                .Open(
+                    "Archipelago reward could not be sent. " +
+                    "Check your connection.",
+                    4f
+                );
+
+            return false;
+        }
+
+        bool claimedStateSaved =
+            SephiriaMod.MarkArchipelagoSephiriteClaimed(
+                __instance.sephirite
+            );
+
+        if (claimedStateSaved)
+        {
+            // We now have a durable Claimed=true record,
+            // so Pending is no longer needed.
+            SephiriaMod.ClearArchipelagoSephiritePendingClaim(
+                __instance.sephirite
+            );
+        }
+        else
+        {
+            // IMPORTANT:
+            // Leave Pending intact.
+            //
+            // The AP server may already have accepted the
+            // location, so reload recovery must determine
+            // what happened.
+            MelonLogger.Error(
+                "[AP Sephirite] AP check succeeded, but " +
+                "claimed state could not be persisted. " +
+                "Pending claim was retained."
+            );
+        }
+
+        SephiriaMod.PlayArchipelagoSephiriteSelectSound(
+            __instance
+        );
+
+        // -1 means finish the Sephirite without adding
+        // its underlying vanilla shell item.
+        ___openedAvatar.SelectSephiriteReward(
+            __instance.sephirite,
+            -1,
+            new ItemPosition(-1, -1)
+        );
+
+        return false;
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_SephiriteRewardPanel),
+    nameof(
+        UI_SephiriteRewardPanel
+            .AcquireSephiriteRewardToSubBag
+    )
+)]
+public static class ArchipelagoSephiriteSubBagClaimPatch
+{
+    public static bool Prefix(
+        UI_SephiriteRewardPanel __instance,
+        UI_SephiriteRewardElement rewardElement,
+        PlayerAvatar ___openedAvatar)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        if (rewardElement == null)
+            return true;
+
+        if (__instance == null ||
+            __instance.sephirite == null ||
+            ___openedAvatar == null)
+        {
+            MelonLogger.Warning(
+                "[AP Sephirite] Invalid reward UI state. " +
+                "AP check was not sent."
+            );
+
+            return false;
+        }
+
+        if (SephiriaMod.IsBlockedArchipelagoSephirite(
+            __instance.sephirite))
+        {
+            MelonLogger.Error(
+                "[AP Sephirite] Blocked Sephirite claim " +
+                "was prevented."
+            );
+
+            if (UIManager.Instance != null)
+            {
+                UIManager.Instance
+                    .GetElement<UI_SystemMessage>()
+                    .Open(
+                        "This Archipelago reward could not be restored safely.",
+                        4f
+                    );
+            }
+
+            return false;
+        }
+
+        long locationId;
+        string locationName;
+
+        if (!SephiriaMod
+                .TryGetArchipelagoSephiriteChoice(
+                    rewardElement.reward.instanceID,
+                    out locationId,
+                    out locationName))
+        {
+            return true;
+        }
+
+        if (!SephiriaMod.SetArchipelagoSephiritePendingClaim(
+                __instance.sephirite,
+                locationId))
+        {
+            MelonLogger.Error(
+                "[AP Sephirite] Could not persist pending " +
+                "claim. AP check was not sent."
+            );
+
+            return false;
+        }
+
+        if (!SephiriaMod
+                .TryCompleteArchipelagoSephiriteChoice(
+                    rewardElement.reward.instanceID,
+                    out locationName))
+        {
+            SephiriaMod.ClearArchipelagoSephiritePendingClaim(
+                __instance.sephirite
+            );
+
+            return false;
+        }
+
+        bool claimedStateSaved =
+            SephiriaMod.MarkArchipelagoSephiriteClaimed(
+                __instance.sephirite
+            );
+
+        if (claimedStateSaved)
+        {
+            SephiriaMod.ClearArchipelagoSephiritePendingClaim(
+                __instance.sephirite
+            );
+        }
+        else
+        {
+            MelonLogger.Error(
+                "[AP Sephirite] AP check succeeded, but " +
+                "claimed state could not be persisted. " +
+                "Pending claim was retained."
+            );
+        }
+
+        SephiriaMod.PlayArchipelagoSephiriteSelectSound(
+            __instance
+        );
+
+        ___openedAvatar.SelectSephiriteReward(
+            __instance.sephirite,
+            -1,
+            new ItemPosition(-1, -1)
+        );
+
+        return false;
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_SephiriteRewardPanel),
+    nameof(UI_SephiriteRewardPanel.Reroll)
+)]
+public static class ArchipelagoSephiriteRerollBlockPatch
+{
+    public static bool Prefix(
+        UI_SephiriteRewardPanel __instance)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        return
+            !SephiriaMod.IsActiveArchipelagoSephirite(
+                __instance.sephirite
+            ) &&
+            !SephiriaMod.IsBlockedArchipelagoSephirite(
+                __instance.sephirite
+            );
+    }
+}
+
+
+[HarmonyPatch(
+    typeof(UI_SephiriteRewardPanel),
+    nameof(UI_SephiriteRewardPanel.SkipSelect)
+)]
+public static class ArchipelagoSephiriteSkipBlockPatch
+{
+    public static bool Prefix(
+        UI_SephiriteRewardPanel __instance)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        return
+            !SephiriaMod.IsActiveArchipelagoSephirite(
+                __instance.sephirite
+            ) &&
+            !SephiriaMod.IsBlockedArchipelagoSephirite(
+                __instance.sephirite
+            );
+    }
+}
+
+
+[HarmonyPatch(
+    typeof(UI_SephiriteRewardPanel),
+    nameof(UI_SephiriteRewardPanel.ConvertRerollDice)
+)]
+public static class ArchipelagoSephiriteConvertBlockPatch
+{
+    public static bool Prefix(
+        UI_SephiriteRewardPanel __instance)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        return
+            !SephiriaMod.IsActiveArchipelagoSephirite(
+                __instance.sephirite
+            ) &&
+            !SephiriaMod.IsBlockedArchipelagoSephirite(
+                __instance.sephirite
+            );
+    }
+}
+
+
+[HarmonyPatch(
+    typeof(Sephirite),
+    nameof(Sephirite.Reroll)
+)]
+public static class ArchipelagoSephiriteUnderlyingRerollBlockPatch
+{
+    public static bool Prefix(
+        Sephirite __instance)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        return
+            !SephiriaMod.IsActiveArchipelagoSephirite(
+                __instance
+            ) &&
+            !SephiriaMod.IsBlockedArchipelagoSephirite(
+                __instance
+            );
+    }
+}
+[HarmonyPatch(
+    typeof(Sephirite),
+    "OnDestroy"
+)]
+public static class ArchipelagoSephiriteDestroyPatch
+{
+    public static void Postfix(
+        Sephirite __instance)
+    {
+        SephiriaMod.ClearArchipelagoSephiriteRuntimeState(
+            __instance
+        );
     }
 }
