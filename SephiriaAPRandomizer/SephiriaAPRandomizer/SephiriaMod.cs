@@ -69,6 +69,9 @@ namespace SephiriaAPRandomizer
         private static int hiddenRoomRewardAttemptsThisRun;
         private static UnityEngine.Sprite archipelagoShrineSprite;
         private static UnityEngine.Sprite archipelagoSephiriteSprite;
+        private static UnityEngine.Sprite archipelagoSephiriteOutlineSprite;
+        private static UnityEngine.Sprite archipelagoSaveProfileSprite;
+        private static UnityEngine.Sprite archipelagoSaveProfileOutlineSprite;
 
         private static bool wasArchipelagoConnected;
         private static bool disconnectMessageShown;
@@ -422,7 +425,7 @@ namespace SephiriaAPRandomizer
             }
         }
 
-        private static UnityEngine.Sprite GetArchipelagoSephiriteSprite(
+        public static UnityEngine.Sprite GetArchipelagoSephiriteSprite(
             UnityEngine.Sprite originalSprite)
         {
             if (archipelagoSephiriteSprite != null)
@@ -537,6 +540,347 @@ namespace SephiriaAPRandomizer
             }
         }
 
+        public static UnityEngine.Sprite GetArchipelagoSephiriteOutlineSprite(
+            UnityEngine.Sprite originalSprite)
+        {
+            if (archipelagoSephiriteOutlineSprite != null)
+                return archipelagoSephiriteOutlineSprite;
+
+            if (originalSprite == null)
+                return null;
+
+            try
+            {
+                Assembly assembly =
+                    Assembly.GetExecutingAssembly();
+
+                using (Stream stream =
+                    assembly.GetManifestResourceStream(
+                        "SephiriaAPRandomizer.Resources.ap_sephirite_icon_outline.png"
+                    ))
+                {
+                    if (stream == null)
+                    {
+                        MelonLogger.Warning(
+                            "[AP Save Icon] Could not find embedded outline logo."
+                        );
+
+                        return null;
+                    }
+
+                    using (System.Drawing.Bitmap bitmap =
+                        new System.Drawing.Bitmap(stream))
+                    {
+                        UnityEngine.Texture2D texture =
+                            new UnityEngine.Texture2D(
+                                bitmap.Width,
+                                bitmap.Height,
+                                UnityEngine.TextureFormat.RGBA32,
+                                false
+                            );
+
+                        UnityEngine.Color32[] pixels =
+                            new UnityEngine.Color32[
+                                bitmap.Width * bitmap.Height
+                            ];
+
+                        for (int y = 0;
+                             y < bitmap.Height;
+                             y++)
+                        {
+                            for (int x = 0;
+                                 x < bitmap.Width;
+                                 x++)
+                            {
+                                System.Drawing.Color pixel =
+                                    bitmap.GetPixel(x, y);
+
+                                int flippedY =
+                                    bitmap.Height - 1 - y;
+
+                                pixels[
+                                    flippedY *
+                                    bitmap.Width +
+                                    x
+                                ] =
+                                    new UnityEngine.Color32(
+                                        pixel.R,
+                                        pixel.G,
+                                        pixel.B,
+                                        pixel.A
+                                    );
+                            }
+                        }
+
+                        texture.SetPixels32(pixels);
+                        texture.Apply();
+
+                        texture.filterMode =
+                            UnityEngine.FilterMode.Point;
+
+                        texture.wrapMode =
+                            UnityEngine.TextureWrapMode.Clamp;
+
+                        archipelagoSephiriteOutlineSprite =
+                            UnityEngine.Sprite.Create(
+                                texture,
+                                new UnityEngine.Rect(
+                                    0,
+                                    0,
+                                    texture.width,
+                                    texture.height
+                                ),
+                                new UnityEngine.Vector2(
+                                    0.5f,
+                                    0.5f
+                                ),
+                                originalSprite.pixelsPerUnit
+                            );
+
+                        archipelagoSephiriteOutlineSprite.name =
+                            "ArchipelagoSephiriteOutlineLogo";
+
+                        return archipelagoSephiriteOutlineSprite;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Error(
+                    "[AP Save Icon] Outline logo load failed: " +
+                    ex
+                );
+
+                return null;
+            }
+        }
+
+        public static UnityEngine.Sprite GetArchipelagoSaveProfileSprite(
+            UnityEngine.Sprite originalSprite)
+        {
+            if (archipelagoSaveProfileSprite != null)
+                return archipelagoSaveProfileSprite;
+
+            if (originalSprite == null)
+                return null;
+
+            try
+            {
+                Assembly assembly =
+                    Assembly.GetExecutingAssembly();
+
+                using (Stream stream =
+                    assembly.GetManifestResourceStream(
+                        "SephiriaAPRandomizer.Resources.ap_sephirite_icon.png"
+                    ))
+                {
+                    if (stream == null)
+                    {
+                        MelonLogger.Warning(
+                            "[AP Save Icon] Could not find embedded AP logo."
+                        );
+
+                        return null;
+                    }
+
+                    using (System.Drawing.Bitmap bitmap =
+                        new System.Drawing.Bitmap(stream))
+                    {
+                        UnityEngine.Texture2D texture =
+                            new UnityEngine.Texture2D(
+                                bitmap.Width,
+                                bitmap.Height,
+                                UnityEngine.TextureFormat.RGBA32,
+                                false
+                            );
+
+                        UnityEngine.Color32[] pixels =
+                            new UnityEngine.Color32[
+                                bitmap.Width * bitmap.Height
+                            ];
+
+                        for (int y = 0;
+                             y < bitmap.Height;
+                             y++)
+                        {
+                            for (int x = 0;
+                                 x < bitmap.Width;
+                                 x++)
+                            {
+                                System.Drawing.Color pixel =
+                                    bitmap.GetPixel(x, y);
+
+                                int flippedY =
+                                    bitmap.Height - 1 - y;
+
+                                pixels[
+                                    flippedY * bitmap.Width + x
+                                ] =
+                                    new UnityEngine.Color32(
+                                        pixel.R,
+                                        pixel.G,
+                                        pixel.B,
+                                        pixel.A
+                                    );
+                            }
+                        }
+
+                        texture.SetPixels32(pixels);
+                        texture.Apply();
+
+                        texture.filterMode =
+                            UnityEngine.FilterMode.Point;
+
+                        texture.wrapMode =
+                            UnityEngine.TextureWrapMode.Clamp;
+
+                        archipelagoSaveProfileSprite =
+                            UnityEngine.Sprite.Create(
+                                texture,
+                                new UnityEngine.Rect(
+                                    0,
+                                    0,
+                                    texture.width,
+                                    texture.height
+                                ),
+                                new UnityEngine.Vector2(
+                                    0.5f,
+                                    0.5f
+                                ),
+                                originalSprite.pixelsPerUnit
+                            );
+
+                        archipelagoSaveProfileSprite.name =
+                            "ArchipelagoSaveProfileLogo";
+
+                        return archipelagoSaveProfileSprite;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Error(
+                    "[AP Save Icon] Logo load failed: " +
+                    ex
+                );
+
+                return null;
+            }
+        }
+
+        public static UnityEngine.Sprite GetArchipelagoSaveProfileOutlineSprite(
+            UnityEngine.Sprite originalSprite)
+        {
+            if (archipelagoSaveProfileOutlineSprite != null)
+                return archipelagoSaveProfileOutlineSprite;
+
+            if (originalSprite == null)
+                return null;
+
+            try
+            {
+                Assembly assembly =
+                    Assembly.GetExecutingAssembly();
+
+                using (Stream stream =
+                    assembly.GetManifestResourceStream(
+                        "SephiriaAPRandomizer.Resources.ap_sephirite_icon_outline.png"
+                    ))
+                {
+                    if (stream == null)
+                    {
+                        MelonLogger.Warning(
+                            "[AP Save Icon] Could not find embedded outline logo."
+                        );
+
+                        return null;
+                    }
+
+                    using (System.Drawing.Bitmap bitmap =
+                        new System.Drawing.Bitmap(stream))
+                    {
+                        UnityEngine.Texture2D texture =
+                            new UnityEngine.Texture2D(
+                                bitmap.Width,
+                                bitmap.Height,
+                                UnityEngine.TextureFormat.RGBA32,
+                                false
+                            );
+
+                        UnityEngine.Color32[] pixels =
+                            new UnityEngine.Color32[
+                                bitmap.Width * bitmap.Height
+                            ];
+
+                        for (int y = 0;
+                             y < bitmap.Height;
+                             y++)
+                        {
+                            for (int x = 0;
+                                 x < bitmap.Width;
+                                 x++)
+                            {
+                                System.Drawing.Color pixel =
+                                    bitmap.GetPixel(x, y);
+
+                                int flippedY =
+                                    bitmap.Height - 1 - y;
+
+                                pixels[
+                                    flippedY * bitmap.Width + x
+                                ] =
+                                    new UnityEngine.Color32(
+                                        pixel.R,
+                                        pixel.G,
+                                        pixel.B,
+                                        pixel.A
+                                    );
+                            }
+                        }
+
+                        texture.SetPixels32(pixels);
+                        texture.Apply();
+
+                        texture.filterMode =
+                            UnityEngine.FilterMode.Point;
+
+                        texture.wrapMode =
+                            UnityEngine.TextureWrapMode.Clamp;
+
+                        archipelagoSaveProfileOutlineSprite =
+                            UnityEngine.Sprite.Create(
+                                texture,
+                                new UnityEngine.Rect(
+                                    0,
+                                    0,
+                                    texture.width,
+                                    texture.height
+                                ),
+                                new UnityEngine.Vector2(
+                                    0.5f,
+                                    0.5f
+                                ),
+                                originalSprite.pixelsPerUnit
+                            );
+
+                        archipelagoSaveProfileOutlineSprite.name =
+                            "ArchipelagoSaveProfileOutlineLogo";
+
+                        return archipelagoSaveProfileOutlineSprite;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Error(
+                    "[AP Save Icon] Outline logo load failed: " +
+                    ex
+                );
+
+                return null;
+            }
+        }
+
         public static void ApplyArchipelagoSephiriteRewardIcon(
             UI_SephiriteRewardElement rewardElement)
         {
@@ -586,6 +930,64 @@ namespace SephiriaAPRandomizer
                         subIcon.gameObject.SetActive(false);
                     }
                 }
+            }
+        }
+
+        public static void ApplyArchipelagoSephiriteSelectedIcon(
+            UI_SephiriteRewardElement rewardElement)
+        {
+            if (!IsArchipelagoSave ||
+                rewardElement == null ||
+                rewardElement.Sephirite == null ||
+                rewardElement.iconImage == null)
+            {
+                return;
+            }
+
+            if (!IsActiveArchipelagoSephirite(
+                    rewardElement.Sephirite))
+            {
+                return;
+            }
+
+            UnityEngine.Sprite outlineSprite =
+                GetArchipelagoSephiriteOutlineSprite(
+                    rewardElement.iconImage.sprite
+                );
+
+            if (outlineSprite != null)
+            {
+                rewardElement.iconImage.sprite =
+                    outlineSprite;
+            }
+        }
+
+        public static void ApplyArchipelagoSephiriteNormalIcon(
+            UI_SephiriteRewardElement rewardElement)
+        {
+            if (!IsArchipelagoSave ||
+                rewardElement == null ||
+                rewardElement.Sephirite == null ||
+                rewardElement.iconImage == null)
+            {
+                return;
+            }
+
+            if (!IsActiveArchipelagoSephirite(
+                    rewardElement.Sephirite))
+            {
+                return;
+            }
+
+            UnityEngine.Sprite normalSprite =
+                GetArchipelagoSephiriteSprite(
+                    rewardElement.iconImage.sprite
+                );
+
+            if (normalSprite != null)
+            {
+                rewardElement.iconImage.sprite =
+                    normalSprite;
             }
         }
 
@@ -4128,8 +4530,45 @@ public static class ArchipelagoSaveChoicePatch
         return false;
     }
 
-    private static void OpenArchipelagoSetup(UI_TitleLobby titleLobby)
+    public static void OpenArchipelagoSetup(
+        UI_TitleLobby titleLobby,
+        SaveData existingSave = null,
+        UI_SaveProfileButton existingButton = null)
     {
+        bool editingExistingSave = existingSave != null;
+
+        string defaultHost =
+            editingExistingSave
+                ? existingSave.GetString(
+                    "ArchipelagoHost",
+                    "localhost"
+                )
+                : "localhost";
+
+        int defaultPort =
+            editingExistingSave
+                ? existingSave.GetInt(
+                    "ArchipelagoPort",
+                    38281
+                )
+                : 38281;
+
+        string defaultSlot =
+            editingExistingSave
+                ? existingSave.GetString(
+                    "ArchipelagoSlot",
+                    ""
+                )
+                : "";
+
+        string defaultPassword =
+            editingExistingSave
+                ? existingSave.GetString(
+                    "ArchipelagoPassword",
+                    ""
+                )
+                : "";
+
         UI_MessageBox_InputYesNo popup =
             UIManager.Instance.GetElement<UI_MessageBox_InputYesNo>();
 
@@ -4162,7 +4601,9 @@ public static class ArchipelagoSaveChoicePatch
                              {
                                  MelonCoroutines.Start(
                                      ReopenArchipelagoSetupNextFrame(
-                                         titleLobby
+                                         titleLobby,
+                                         existingSave,
+                                         existingButton
                                      )
                                  );
                              }
@@ -4196,11 +4637,38 @@ public static class ArchipelagoSaveChoicePatch
                              {
                                  MelonCoroutines.Start(
                                      ReopenArchipelagoSetupNextFrame(
-                                         titleLobby
+                                         titleLobby,
+                                         existingSave,
+                                         existingButton
                                      )
                                  );
                              }
                          );
+
+                     return;
+                 }
+
+                 if (editingExistingSave)
+                 {
+                     existingSave.SetString("ArchipelagoHost", hostValue);
+                     existingSave.SetInt("ArchipelagoPort", port);
+                     existingSave.SetString("ArchipelagoSlot", slotName);
+                     existingSave.SetString("ArchipelagoPassword", password);
+                     existingSave.Save();
+
+                     MelonLogger.Msg(
+                         $"[DEBUG] Updated AP save settings: " +
+                         $"{hostValue}:{port}, Slot={slotName}"
+                     );
+
+                     // AP is already connected successfully.
+                     // Allow Sephiria's normal CheckAndStart to continue
+                     // without trying to reconnect to AP a second time.
+                     continueAfterChoice = true;
+
+                     // Use Sephiria's normal save-button flow to load
+                     // this exact existing save.
+                     existingButton.SelectProfile();
 
                      return;
                  }
@@ -4262,11 +4730,30 @@ public static class ArchipelagoSaveChoicePatch
                      .Invoke(titleLobby, null);
              },
              null,
-             "localhost",
+             defaultHost,
              "",
              allowEmpty: false,
              100
         );
+
+        // Give the AP setup popup clearer button labels.
+        TMPro.TextMeshProUGUI yesButtonText =
+            popup.yesButton.GetComponentInChildren<TMPro.TextMeshProUGUI>(true);
+
+        TMPro.TextMeshProUGUI noButtonText =
+            popup.noButton.GetComponentInChildren<TMPro.TextMeshProUGUI>(true);
+
+        string originalYesButtonText =
+            yesButtonText != null ? yesButtonText.text : null;
+
+        string originalNoButtonText =
+            noButtonText != null ? noButtonText.text : null;
+
+        if (yesButtonText != null)
+            yesButtonText.text = "Connect";
+
+        if (noButtonText != null)
+            noButtonText.text = "Cancel";
 
         // Make the popup taller.
         UnityEngine.RectTransform popupRect =
@@ -4298,7 +4785,7 @@ public static class ArchipelagoSaveChoicePatch
         portInput =
             portObject.GetComponent<TMPro.TMP_InputField>();
 
-        portInput.text = "38281";
+        portInput.text = defaultPort.ToString();
         portInput.characterLimit = 5;
 
         UnityEngine.RectTransform portRect =
@@ -4317,7 +4804,7 @@ public static class ArchipelagoSaveChoicePatch
         slotInput =
             slotObject.GetComponent<TMPro.TMP_InputField>();
 
-        slotInput.text = "";
+        slotInput.text = defaultSlot;
         slotInput.characterLimit = 30;
 
         UnityEngine.RectTransform slotRect =
@@ -4403,7 +4890,7 @@ public static class ArchipelagoSaveChoicePatch
         passwordInput =
             passwordObject.GetComponent<TMPro.TMP_InputField>();
 
-        passwordInput.text = "";
+        passwordInput.text = defaultPassword;
         passwordInput.characterLimit = 100;
         passwordInput.contentType =
             TMPro.TMP_InputField.ContentType.Password;
@@ -4459,6 +4946,19 @@ public static class ArchipelagoSaveChoicePatch
             // Restore Sephiria's original popup layout.
             popupRect.sizeDelta = originalPopupSize;
             hostRect.anchoredPosition = originalHostPosition;
+
+            // Restore Sephiria's original button labels.
+            if (yesButtonText != null &&
+                originalYesButtonText != null)
+            {
+                yesButtonText.text = originalYesButtonText;
+            }
+
+            if (noButtonText != null &&
+                originalNoButtonText != null)
+            {
+                noButtonText.text = originalNoButtonText;
+            }
 
             // Remove everything we cloned for the AP setup popup.
             UnityEngine.Object.Destroy(portObject);
@@ -4555,11 +5055,17 @@ public static class ArchipelagoSaveChoicePatch
     }
 
     private static IEnumerator ReopenArchipelagoSetupNextFrame(
-    UI_TitleLobby titleLobby)
+        UI_TitleLobby titleLobby,
+        SaveData existingSave = null,
+        UI_SaveProfileButton existingButton = null)
     {
         yield return null;
 
-        OpenArchipelagoSetup(titleLobby);
+        OpenArchipelagoSetup(
+            titleLobby,
+            existingSave,
+            existingButton
+        );
     }
 
     private static async Task ConnectExistingArchipelagoSave(
@@ -4628,6 +5134,238 @@ public static class ArchipelagoSaveChoicePatch
                 "CheckAndStart"
             )
             .Invoke(titleLobby, null);
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_SaveProfileButton),
+    nameof(UI_SaveProfileButton.InitializeProfile)
+)]
+public static class ArchipelagoSaveProfileButtonPatch
+{
+    public static void RemoveArchipelagoIcon(
+        UI_SaveProfileButton button)
+    {
+        if (button == null)
+            return;
+
+        Transform existingIcon =
+            button.transform.Find("ArchipelagoSaveIcon");
+
+        if (existingIcon != null)
+        {
+            UnityEngine.Object.Destroy(
+                existingIcon.gameObject
+            );
+
+            MelonLogger.Msg(
+                $"[AP Save Icon] Removed icon from " +
+                $"{button.slotName}"
+            );
+        }
+    }
+
+    public static void Postfix(
+        UI_SaveProfileButton __instance,
+        SaveData data)
+    {
+        if (data == null)
+            return;
+
+        bool isArchipelagoSave =
+            data.GetBool(
+                "ArchipelagoSave",
+                false
+            );
+
+        if (!isArchipelagoSave)
+        {
+            RemoveArchipelagoIcon(__instance);
+            return;
+        }
+
+        MelonLogger.Msg(
+            $"[AP Save Icon] Found AP save: " +
+            $"{__instance.slotName}"
+        );
+
+        // Don't create the icon twice.
+        Transform existingIcon =
+            __instance.transform.Find("ArchipelagoSaveIcon");
+
+        if (existingIcon != null)
+            return;
+
+        // Use the AP logo we already load for Sephirite rewards.
+        UnityEngine.Sprite originalSprite =
+            __instance.selectedImage != null
+                ? __instance.selectedImage.sprite
+                : null;
+
+        UnityEngine.Sprite apSprite =
+            SephiriaMod.GetArchipelagoSaveProfileSprite(
+                originalSprite
+            );
+
+        if (apSprite == null)
+        {
+            MelonLogger.Warning(
+                "[AP Save Icon] Could not load AP icon."
+            );
+
+            return;
+        }
+
+        UnityEngine.Sprite apOutlineSprite =
+        SephiriaMod.GetArchipelagoSaveProfileOutlineSprite(
+            originalSprite
+        );
+
+        if (apOutlineSprite == null)
+        {
+            MelonLogger.Warning(
+                "[AP Save Icon] Could not load AP outline icon."
+            );
+        }
+
+        GameObject iconObject =
+            new GameObject(
+                "ArchipelagoSaveIcon",
+                typeof(RectTransform),
+                typeof(UnityEngine.UI.Image)
+            );
+
+        iconObject.transform.SetParent(
+            __instance.transform,
+            false
+        );
+
+        RectTransform iconRect =
+            iconObject.GetComponent<RectTransform>();
+
+        // Anchor to upper-right corner of this save box.
+        iconRect.anchorMin = new Vector2(1f, 1f);
+        iconRect.anchorMax = new Vector2(1f, 1f);
+        iconRect.pivot = new Vector2(1f, 1f);
+
+        iconRect.sizeDelta =
+            new Vector2(26f, 26f);
+
+        iconRect.anchoredPosition =
+            new Vector2(-8f, -7f);
+
+        UnityEngine.UI.Image iconImage =
+            iconObject.GetComponent<UnityEngine.UI.Image>();
+
+        iconImage.sprite = apSprite;
+        iconImage.preserveAspect = true;
+
+        // Allow this icon to receive mouse clicks.
+        iconImage.raycastTarget = true;
+
+        // Swap to the white-outline version while hovering.
+        UnityEngine.EventSystems.EventTrigger eventTrigger =
+            iconObject.AddComponent<
+                UnityEngine.EventSystems.EventTrigger
+            >();
+
+        UnityEngine.EventSystems.EventTrigger.Entry enterEntry =
+            new UnityEngine.EventSystems.EventTrigger.Entry();
+
+        enterEntry.eventID =
+            UnityEngine.EventSystems.EventTriggerType.PointerEnter;
+
+        enterEntry.callback.AddListener(
+            delegate (UnityEngine.EventSystems.BaseEventData _)
+            {
+                if (apOutlineSprite != null)
+                {
+                    iconImage.sprite =
+                        apOutlineSprite;
+                }
+            }
+        );
+
+        eventTrigger.triggers.Add(enterEntry);
+
+        UnityEngine.EventSystems.EventTrigger.Entry exitEntry =
+            new UnityEngine.EventSystems.EventTrigger.Entry();
+
+        exitEntry.eventID =
+            UnityEngine.EventSystems.EventTriggerType.PointerExit;
+
+        exitEntry.callback.AddListener(
+            delegate (UnityEngine.EventSystems.BaseEventData _)
+            {
+                iconImage.sprite =
+                    apSprite;
+            }
+        );
+
+        eventTrigger.triggers.Add(exitEntry);
+
+        UnityEngine.UI.Button iconButton =
+            iconObject.AddComponent<UnityEngine.UI.Button>();
+
+        iconButton.targetGraphic = iconImage;
+
+        // Don't add any automatic Unity button tinting yet.
+        iconButton.transition =
+            UnityEngine.UI.Selectable.Transition.None;
+
+        iconButton.onClick.AddListener(
+            delegate
+            {
+                iconImage.sprite = apSprite;
+
+                MelonLogger.Msg(
+                    $"[AP Save Icon] Opening AP setup for " +
+                    $"{__instance.slotName}"
+                );
+
+                ArchipelagoSaveChoicePatch.OpenArchipelagoSetup(
+                    __instance.parentPanel.titleLobby,
+                    data,
+                    __instance
+                );
+            }
+        );
+
+        // Keep it above the other contents of the save box.
+        iconObject.transform.SetAsLastSibling();
+
+        MelonLogger.Msg(
+            $"[AP Save Icon] Created icon for " +
+            $"{__instance.slotName}"
+        );
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_SaveProfileButton),
+    "PrintEmpty"
+)]
+public static class ArchipelagoSaveProfileEmptyPatch
+{
+    public static void Postfix(
+        UI_SaveProfileButton __instance)
+    {
+        ArchipelagoSaveProfileButtonPatch
+            .RemoveArchipelagoIcon(__instance);
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_SaveProfileButton),
+    "PrintLoadError"
+)]
+public static class ArchipelagoSaveProfileLoadErrorPatch
+{
+    public static void Postfix(
+        UI_SaveProfileButton __instance)
+    {
+        ArchipelagoSaveProfileButtonPatch
+            .RemoveArchipelagoIcon(__instance);
     }
 }
 
@@ -6759,6 +7497,10 @@ public static class ArchipelagoSephiriteTooltipVisualPatch
             tooltip,
             "sephiriteDisableScreen"
         );
+
+        SephiriaMod.ApplyArchipelagoSephiriteSelectedIcon(
+            __instance
+        );
     }
 
     private static void ApplyArchipelagoTooltipIcon(
@@ -7087,6 +7829,21 @@ public static class ArchipelagoSephiriteTooltipVisualPatch
         savedTooltipImageStates.Clear();
 
         savedTooltipObjectStates.Clear();
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_SephiriteRewardElement),
+    nameof(UI_SephiriteRewardElement.OnDeselect)
+)]
+public static class ArchipelagoSephiriteDeselectIconPatch
+{
+    public static void Postfix(
+        UI_SephiriteRewardElement __instance)
+    {
+        SephiriaMod.ApplyArchipelagoSephiriteNormalIcon(
+            __instance
+        );
     }
 }
 
