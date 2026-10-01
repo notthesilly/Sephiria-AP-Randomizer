@@ -4,6 +4,7 @@ using Archipelago.MultiClient.Net.Helpers;
 using Archipelago.MultiClient.Net.Models;
 using HarmonyLib;
 using MelonLoader;
+using Mirror;
 using SephiriaAPRandomizer;
 using System;
 using System.Collections;
@@ -586,6 +587,62 @@ namespace SephiriaAPRandomizer
                     }
                 }
             }
+        }
+
+        public static void ApplyArchipelagoSephiritePickerIcon(
+            UI_NewItemPicker_Controller picker,
+            UI_SephiriteRewardElement rewardElement)
+        {
+            if (!IsArchipelagoSave)
+                return;
+
+            if (picker == null ||
+                picker.iconImage == null ||
+                rewardElement == null ||
+                rewardElement.Sephirite == null)
+            {
+                return;
+            }
+
+            if (!IsActiveArchipelagoSephirite(
+                    rewardElement.Sephirite))
+            {
+                return;
+            }
+
+            long locationId;
+            string locationName;
+
+            if (!TryGetArchipelagoSephiriteChoice(
+                    rewardElement.reward.instanceID,
+                    out locationId,
+                    out locationName))
+            {
+                return;
+            }
+
+            UnityEngine.Sprite logo =
+                GetArchipelagoSephiriteSprite(
+                    picker.iconImage.sprite
+                );
+
+            if (logo == null)
+                return;
+
+            picker.iconImage.sprite = logo;
+            picker.iconImage.preserveAspect = true;
+
+            picker.iconImage.rectTransform.sizeDelta =
+                new Vector2(
+                    picker.iconImage.preferredWidth,
+                    picker.iconImage.preferredHeight
+                );
+
+            picker.iconImage.material =
+                picker.iconImage.defaultMaterial;
+
+            picker.iconImage.rectTransform.rotation =
+                Quaternion.identity;
         }
 
         public static void ApplyArchipelagoShrineVisual(
@@ -1830,7 +1887,6 @@ namespace SephiriaAPRandomizer
             return true;
         }
 
-
         private static List<long>
             GetMissingArchipelagoSephiriteChecks(
                 ArchipelagoSession apSession,
@@ -2501,6 +2557,133 @@ namespace SephiriaAPRandomizer
             return true;
         }
 
+        public static void ApplyArchipelagoSephiriteRarity(
+            UI_SephiriteRewardElement rewardElement,
+            long locationId)
+        {
+            if (!IsArchipelagoSave ||
+                rewardElement == null ||
+                rewardElement.bgImage == null)
+            {
+                return;
+            }
+
+            ArchipelagoScoutedItemData itemData;
+
+            if (!archipelagoSephiriteScoutedItems.TryGetValue(
+                    locationId,
+                    out itemData) ||
+                itemData == null)
+            {
+                return;
+            }
+
+            // Archipelago classification flags:
+            // 1 = progression
+            // 2 = useful
+            // 4 = trap
+            // 0 = filler
+            if ((itemData.Flags & 1) != 0)
+            {
+                rewardElement.bgImage.sprite =
+                    rewardElement.legendBGSprite;
+
+                rewardElement.isGoodItem = true;
+            }
+            else if ((itemData.Flags & 2) != 0)
+            {
+                rewardElement.bgImage.sprite =
+                    rewardElement.rareBGSprite;
+
+                rewardElement.isGoodItem = true;
+            }
+            else if ((itemData.Flags & 4) != 0)
+            {
+                rewardElement.bgImage.sprite =
+                    rewardElement.uncummonBGSprite;
+
+                rewardElement.isGoodItem = false;
+            }
+            else
+            {
+                rewardElement.bgImage.sprite =
+                    rewardElement.cummonBGSprite;
+
+                rewardElement.isGoodItem = false;
+            }
+
+            // Clear any rarity effects that were activated by
+            // the underlying vanilla shell.
+            if (rewardElement.pooled != null)
+            {
+                foreach (UI_CursorFx effect in rewardElement.pooled)
+                {
+                    if (effect != null)
+                    {
+                        effect.gameObject.SetActive(false);
+                    }
+                }
+            }
+
+            // Do not let a legendary vanilla shell leave its
+            // legendary animation active on a non-progression AP item.
+            if (rewardElement.legendaryFxAnimation != null)
+            {
+                bool isProgression =
+                    (itemData.Flags & 1) != 0;
+
+                rewardElement.legendaryFxAnimation
+                    .gameObject
+                    .SetActive(isProgression);
+
+                if (isProgression &&
+                    rewardElement.legendaryFxAnimation.IsReady)
+                {
+                    rewardElement.legendaryFxAnimation
+                        .SetEntryState();
+                }
+            }
+        }
+
+        public static bool TryGetArchipelagoSephiriteRarity(
+            long locationId,
+            out EItemRarity rarity)
+        {
+            rarity = EItemRarity.Common;
+
+            if (!IsArchipelagoSave)
+                return false;
+
+            ArchipelagoScoutedItemData itemData;
+
+            if (!archipelagoSephiriteScoutedItems.TryGetValue(
+                    locationId,
+                    out itemData) ||
+                itemData == null)
+            {
+                return false;
+            }
+
+            if ((itemData.Flags & 1) != 0)
+            {
+                rarity = EItemRarity.Legend;
+            }
+            else if ((itemData.Flags & 2) != 0)
+            {
+                rarity = EItemRarity.Rare;
+            }
+            else if ((itemData.Flags & 4) != 0)
+            {
+                rarity = EItemRarity.Uncommon;
+            }
+            else
+            {
+                rarity = EItemRarity.Common;
+            }
+
+            return true;
+        }
+
         public static void ApplyArchipelagoTooltipIcon(
             UnityEngine.UI.Image iconImage)
         {
@@ -2968,6 +3151,8 @@ namespace SephiriaAPRandomizer
                 return;
 
             bool changed = false;
+            bool declineChanged = false;
+            bool mindBurdenChanged = false;
 
             foreach (KeyValuePair<string, int> shard
                 in hardModeMaxLevelsByShardKey)
@@ -3018,6 +3203,16 @@ namespace SephiriaAPRandomizer
 
                 changed = true;
 
+                if (shardKey == "DECLINE")
+                {
+                    declineChanged = true;
+                }
+
+                if (shardKey == "MINDBURDEN")
+                {
+                    mindBurdenChanged = true;
+                }
+
                 MelonLogger.Msg(
                     $"AP Hard Mode: {shardKey} " +
                     $"{currentLevel} -> {desiredLevel} " +
@@ -3040,11 +3235,262 @@ namespace SephiriaAPRandomizer
                             DungeonManager.Instance.raceId
                         );
 
+                    if (declineChanged)
+                        RefreshArchipelagoDeclineRuntimeStatus();
+
+                    if (mindBurdenChanged)
+                        RefreshArchipelagoMindBurdenRuntimeItem();
+
+                    RefreshArchipelagoHardModeIndicator();
+
                     MelonLogger.Msg(
                         "[AP Hard Mode] Runtime state refreshed."
                     );
                 }
             }
+        }
+
+        private static void RefreshArchipelagoDeclineRuntimeStatus()
+        {
+            if (!IsArchipelagoSave)
+                return;
+
+            if (!Mirror.NetworkServer.active)
+                return;
+
+            if (DungeonManager.Instance == null)
+                return;
+
+            int declineValue = 0;
+
+            DungeonManager.Instance
+                .hardModeEnvironment
+                .TryGetValue(
+                    "DECLINE",
+                    out declineValue
+                );
+
+            foreach (PlayerSpawner playerSpawner
+                in PlayerSpawner.MultiplayerList)
+            {
+                if (playerSpawner == null ||
+                    playerSpawner.PlayerAvatar == null)
+                {
+                    continue;
+                }
+
+                PlayerAvatar player =
+                    playerSpawner.PlayerAvatar;
+
+                for (int i =
+                        player.orphanedStatusInstancesServerside.Count - 1;
+                     i >= 0;
+                     i--)
+                {
+                    StatusInstance status =
+                        player.orphanedStatusInstancesServerside[i];
+
+                    if (status == null ||
+                        status.ID !=
+                            "HARDMODE_HEALING_PENALTY")
+                    {
+                        continue;
+                    }
+
+                    status.RemoveStatus();
+                    status.ClearTarget();
+
+                    player.orphanedStatusInstancesServerside
+                        .RemoveAt(i);
+                }
+
+                if (declineValue > 0)
+                {
+                    StatusInstance replacement =
+                        StatusDatabase.CreateStatusEntity(
+                            "HARDMODE_HEALING_PENALTY",
+                            declineValue
+                        );
+
+                    if (replacement != null)
+                    {
+                        player.AddOrphanedStatusInstance(
+                            replacement
+                        );
+                    }
+                }
+            }
+
+            MelonLogger.Msg(
+                "[AP Hard Mode] Decline runtime status refreshed " +
+                "to " + declineValue + "."
+            );
+        }
+
+        private static void RefreshArchipelagoMindBurdenRuntimeItem()
+        {
+            if (!IsArchipelagoSave)
+                return;
+
+            if (!Mirror.NetworkServer.active)
+                return;
+
+            if (DungeonManager.Instance == null)
+                return;
+
+            int mindBurdenValue = 0;
+
+            DungeonManager.Instance
+                .hardModeEnvironment
+                .TryGetValue(
+                    "MINDBURDEN",
+                    out mindBurdenValue
+                );
+
+            // Heavy Heart should still exist while
+            // MINDBURDEN is active.
+            if (mindBurdenValue > 0)
+                return;
+
+            foreach (PlayerSpawner playerSpawner
+                in PlayerSpawner.MultiplayerList)
+            {
+                if (playerSpawner == null ||
+                    playerSpawner.PlayerAvatar == null)
+                {
+                    continue;
+                }
+
+                PlayerAvatar player =
+                    playerSpawner.PlayerAvatar;
+
+                GridInventory inventory =
+                    player.Inventory;
+
+                if (inventory == null)
+                    continue;
+
+                HashSet<int> heavyHeartInstanceIds =
+                    new HashSet<int>();
+
+                foreach (NewItemOwnInstance item
+                    in inventory.inventoryMatrix.Values)
+                {
+                    if (item == null ||
+                        item.EntityID != 1304)
+                    {
+                        continue;
+                    }
+
+                    int instanceId =
+                        item.InstanceID;
+
+                    string ownRestriction =
+                        DungeonManager.Instance
+                            .GetGlobalItemStatValue(
+                                instanceId,
+                                "OwnRestriction"
+                            );
+
+                    string boundPlayer =
+                        DungeonManager.Instance
+                            .GetGlobalItemStatValue(
+                                instanceId,
+                                "Bound"
+                            );
+
+                    if (ownRestriction !=
+                        ((int)ERestrictedOwnType.StartingItem)
+                            .ToString())
+                    {
+                        continue;
+                    }
+
+                    if (boundPlayer !=
+                        playerSpawner.currentPlayerIdx
+                            .ToString())
+                    {
+                        continue;
+                    }
+
+                    heavyHeartInstanceIds.Add(
+                        instanceId
+                    );
+                }
+
+                if (heavyHeartInstanceIds.Count == 0)
+                    continue;
+
+                using (new GridInventory.Permission(inventory))
+                {
+                    foreach (int instanceId
+                        in heavyHeartInstanceIds)
+                    {
+                        inventory.RemoveStartingItem(
+                            instanceId
+                        );
+
+                        DungeonManager.Instance
+                            .UnboundOnServer(
+                                instanceId
+                            );
+
+                        string restrictionKey =
+                            DungeonManager.Instance
+                                .BuildGlobalItemStatKey(
+                                    instanceId,
+                                    "OwnRestriction"
+                                );
+
+                        DungeonManager.Instance
+                            .globalItemStatTable
+                            .Remove(restrictionKey);
+
+                        MelonLogger.Msg(
+                            "[AP Hard Mode] Heavy Heart " +
+                            "runtime item removed. " +
+                            "InstanceId=" + instanceId
+                        );
+                    }
+                }
+            }
+        }
+
+        private static void RefreshArchipelagoHardModeIndicator()
+        {
+            if (!IsArchipelagoSave)
+                return;
+
+            if (UIManager.Instance == null)
+                return;
+
+            UI_HardModeIndicator indicator =
+                UIManager.Instance
+                    .GetElement<UI_HardModeIndicator>();
+
+            if (indicator == null)
+                return;
+
+            MethodInfo refreshMethod =
+                AccessTools.Method(
+                    typeof(UI_HardModeIndicator),
+                    "CheckHUDMapVisible"
+                );
+
+            if (refreshMethod == null)
+            {
+                MelonLogger.Warning(
+                    "[AP Hard Mode] Could not find " +
+                    "UI_HardModeIndicator.CheckHUDMapVisible."
+                );
+
+                return;
+            }
+
+            refreshMethod.Invoke(
+                indicator,
+                null
+            );
         }
 
         public static void InitializeChapter1()
@@ -4182,6 +4628,130 @@ public static class ArchipelagoSaveChoicePatch
                 "CheckAndStart"
             )
             .Invoke(titleLobby, null);
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_TitleLobby),
+    nameof(UI_TitleLobby.Join)
+)]
+public static class ArchipelagoJoinContextPatch
+{
+    public static bool IsJoinInProgress { get; private set; }
+
+    public static void Prefix()
+    {
+        IsJoinInProgress = true;
+    }
+
+    public static void Postfix()
+    {
+        IsJoinInProgress = false;
+    }
+}
+
+[HarmonyPatch(
+    typeof(NetworkManager),
+    nameof(NetworkManager.StartClient),
+    new Type[] { }
+)]
+public static class ArchipelagoJoinConnectionGatePatch
+{
+    private static bool reconnecting = false;
+
+    public static bool Prefix(
+        NetworkManager __instance)
+    {
+        // Only interfere with StartClient when it came specifically
+        // from UI_TitleLobby.Join().
+        if (!ArchipelagoJoinContextPatch.IsJoinInProgress)
+            return true;
+
+        // Normal saves behave exactly as vanilla.
+        if (SaveManager.Current == null ||
+            !SaveManager.Current.GetBool(
+                "ArchipelagoSave",
+                false))
+        {
+            return true;
+        }
+
+        // Prevent a second Join click while AP is connecting.
+        if (reconnecting)
+            return false;
+
+        reconnecting = true;
+
+        _ = ReconnectAndStartClient(__instance);
+
+        // Do NOT let Sephiria connect yet.
+        return false;
+    }
+
+    private static async Task ReconnectAndStartClient(
+        NetworkManager networkManager)
+    {
+        string host =
+            SaveManager.Current.GetString(
+                "ArchipelagoHost",
+                ""
+            );
+
+        int port =
+            SaveManager.Current.GetInt(
+                "ArchipelagoPort",
+                0
+            );
+
+        string slotName =
+            SaveManager.Current.GetString(
+                "ArchipelagoSlot",
+                ""
+            );
+
+        string password =
+            SaveManager.Current.GetString(
+                "ArchipelagoPassword",
+                ""
+            );
+
+        MelonLogger.Msg(
+            $"Reconnecting AP save before Join: " +
+            $"{host}:{port}, Slot={slotName}"
+        );
+
+        bool connected =
+            await SephiriaMod.ConnectToArchipelago(
+                host,
+                port,
+                slotName,
+                password
+            );
+
+        reconnecting = false;
+
+        if (!connected)
+        {
+            UIManager.Instance
+                .GetElement<UI_MessageBoxHolder>()
+                .OpenYes(
+                    "Failed to reconnect to Archipelago.\n\n" +
+                    "Check that the Archipelago server is running " +
+                    "and that this save's connection information is still valid.",
+                    null
+                );
+
+            return;
+        }
+
+        MelonLogger.Msg(
+            "Archipelago reconnected successfully. " +
+            "Continuing Join."
+        );
+
+        // Join() has already returned by this point, so our
+        // Join-context gate is no longer active.
+        networkManager.StartClient();
     }
 }
 
@@ -5987,14 +6557,30 @@ public static class ArchipelagoSephiriteRewardVisualPatch
             __instance.nameText.text = itemName;
         }
 
-        SephiriaMod.ApplyArchipelagoSephiriteRewardIcon(
-            __instance
-        );
+        SephiriaMod.ApplyArchipelagoSephiriteRewardIcon(__instance);
+        SephiriaMod.ApplyArchipelagoSephiriteRarity(__instance, locationId);
 
         if (__instance.levelImage != null)
         {
             __instance.levelImage.gameObject.SetActive(false);
         }
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_NewItemPicker_Controller),
+    nameof(UI_NewItemPicker_Controller.PickSephiriteReward)
+)]
+public static class ArchipelagoSephiritePickerIconPatch
+{
+    public static void Postfix(
+        UI_NewItemPicker_Controller __instance,
+        UI_SephiriteRewardElement instance)
+    {
+        SephiriaMod.ApplyArchipelagoSephiritePickerIcon(
+            __instance,
+            instance
+        );
     }
 }
 
@@ -6099,6 +6685,19 @@ public static class ArchipelagoSephiriteTooltipVisualPatch
             "nameText",
             itemName
         );
+
+        EItemRarity apRarity;
+
+        if (SephiriaMod.TryGetArchipelagoSephiriteRarity(
+                locationId,
+                out apRarity))
+        {
+            SetTextRarityColor(
+                tooltip,
+                "nameText",
+                apRarity
+            );
+        }
 
         // Remove information belonging to the
         // underlying vanilla shell item.
@@ -6257,6 +6856,38 @@ public static class ArchipelagoSephiriteTooltipVisualPatch
             value,
             null
         );
+    }
+
+    private static void SetTextRarityColor(
+        object tooltip,
+        string fieldName,
+        EItemRarity rarity)
+    {
+        if (tooltip == null)
+            return;
+
+        FieldInfo field =
+            AccessTools.Field(
+                tooltip.GetType(),
+                fieldName
+            );
+
+        if (field == null)
+            return;
+
+        TMPro.TMP_Text textObject =
+            field.GetValue(tooltip)
+                as TMPro.TMP_Text;
+
+        if (textObject == null)
+            return;
+
+        textObject.color =
+            ItemDatabase.GetColorViaItemRarity(
+                rarity
+            );
+
+        textObject.enableVertexGradient = false;
     }
 
     private static void HideTooltipObjectAndRemember(
@@ -6488,5 +7119,84 @@ public static class ArchipelagoSephiriteTooltipDisablePatch
             .RestoreTooltipState(
                 __instance
             );
+    }
+}
+
+[HarmonyPatch(
+    typeof(PlayerAvatar),
+    nameof(PlayerAvatar.ServerLoadStage)
+)]
+public static class ArchipelagoLevelUpStageTransitionPatch
+{
+    public static bool Prefix(
+        PlayerAvatar __instance,
+        string stageName)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        if (__instance == null ||
+            DungeonManager.Instance == null)
+        {
+            return true;
+        }
+
+        LevelController levelController =
+            __instance.GetComponent<LevelController>();
+
+        if (levelController == null ||
+            levelController.levelUpQueue == null ||
+            levelController.levelUpQueue.Count == 0)
+        {
+            return true;
+        }
+
+        FloorData currentFloor;
+
+        if (!DungeonManager.Instance.generatedFloors.TryGetValue(
+                __instance.currentFloorGuid,
+                out currentFloor) ||
+            currentFloor == null)
+        {
+            return true;
+        }
+
+        int currentStageProgress;
+
+        if (!DungeonManager.Instance.stageProgress.TryGetValue(
+                currentFloor.stageName,
+                out currentStageProgress))
+        {
+            return true;
+        }
+
+        bool protectedTransition =
+            currentStageProgress == 1 ||
+            currentStageProgress == 2 ||
+            currentStageProgress == 3 ||
+            currentStageProgress == 4 ||
+            currentStageProgress == 6;
+
+        if (!protectedTransition)
+            return true;
+
+        MelonLogger.Msg(
+            $"[AP Stage Gate] Blocked " +
+            $"{currentFloor.stageName} ({currentStageProgress}) -> " +
+            $"{stageName}. " +
+            $"QueuedLevelUps={levelController.levelUpQueue.Count}"
+        );
+
+        if (UIManager.Instance != null)
+        {
+            UIManager.Instance
+                .GetElement<UI_SystemMessage>()
+                .Open(
+                    "Claim your level-up reward before continuing.",
+                    4f
+                );
+        }
+
+        return false;
     }
 }
