@@ -6,15 +6,18 @@ from .Options import SephiriaOptions
 from .Items import (
     SephiriaItem,
     item_table,
-    hard_mode_reduction_counts
+    hard_mode_reduction_counts,
+    costume_item_to_id
 )
 
 from .Locations import (
     SephiriaLocation,
     get_sephirite_check_count,
-    location_table, shrine_check_counts,
+    location_table,
+    shrine_check_counts,
     chapter_floor_counts,
-    floor_names
+    floor_names,
+    costume_mission_location_table
 )
 
 
@@ -88,19 +91,49 @@ class SephiriaWorld(World):
 
                 menu.locations.append(location)
 
+        # -------------------------------------------------
+        # Costume mission checks
+        # -------------------------------------------------
+
+        for location_name, location_id in (
+            costume_mission_location_table.items()
+        ):
+            location = SephiriaLocation(
+                self.player,
+                location_name,
+                location_id,
+                menu
+            )
+
+            menu.locations.append(location)
+
     def create_items(self):
         goal_chapter = self.options.goal_chapter.value
 
         shrine_count = shrine_check_counts[goal_chapter]
         floor_count = chapter_floor_counts[goal_chapter]
+
         sephirite_count = sum(
             get_sephirite_check_count(floor_number)
             for floor_number in range(
-                    1,
-                    floor_count + 1
-                )
+                1,
+                floor_count + 1
             )
-        total_location_count = (shrine_count + sephirite_count)
+        )
+
+        costume_mission_count = len(
+            costume_mission_location_table
+        )
+
+        total_location_count = (
+            shrine_count +
+            sephirite_count +
+            costume_mission_count
+        )
+
+        # -------------------------------------------------
+        # Hard Mode reduction items
+        # -------------------------------------------------
 
         reduction_pool = []
 
@@ -111,7 +144,6 @@ class SephiriaWorld(World):
 
         self.random.shuffle(reduction_pool)
 
-        # Add every Hard Mode reduction item.
         for item_name in reduction_pool:
             item = SephiriaItem(
                 item_name,
@@ -122,14 +154,63 @@ class SephiriaWorld(World):
 
             self.multiworld.itempool.append(item)
 
+        # -------------------------------------------------
+        # Costumes
+        # -------------------------------------------------
 
-        if total_location_count < len(reduction_pool):
-            raise Exception("Not enough locations for all Hard Mode reduction items.")
+        costume_names = list(
+            costume_item_to_id.keys()
+        )
 
-        # Fill all remaining locations with Nothing.
+        # Every seed gives the player exactly one random
+        # starting costume.
+        self.starting_costume_name = (
+            self.random.choice(costume_names)
+        )
+
+        self.starting_costume_id = (
+            costume_item_to_id[
+                self.starting_costume_name
+            ]
+        )
+
+        # Every costume except the starting costume
+        # becomes an Archipelago item.
+        for costume_name in costume_names:
+            if costume_name == self.starting_costume_name:
+                continue
+
+            item = SephiriaItem(
+                costume_name,
+                ItemClassification.useful,
+                item_table[costume_name],
+                self.player
+            )
+
+            self.multiworld.itempool.append(item)
+
+        # -------------------------------------------------
+        # Fill remaining locations
+        # -------------------------------------------------
+
+        costume_item_count = (
+            len(costume_names) - 1
+        )
+
+        required_item_count = (
+            len(reduction_pool) +
+            costume_item_count
+        )
+
+        if total_location_count < required_item_count:
+            raise Exception(
+                "Not enough locations for all "
+                "Archipelago items."
+            )
+
         nothing_count = (
             total_location_count -
-            len(reduction_pool)
+            required_item_count
         )
 
         for _ in range(nothing_count):
@@ -144,9 +225,19 @@ class SephiriaWorld(World):
 
     def fill_slot_data(self):
         return {
-            "goal_chapter": self.options.goal_chapter.value,
-            "required_chapter_clears": self.options.required_chapter_clears.value,
-            "unique_weapons_required": bool(
-                self.options.unique_weapons_required.value    
-            ),
+            "goal_chapter":
+                self.options.goal_chapter.value,
+
+            "required_chapter_clears":
+                self.options.required_chapter_clears.value,
+
+            "unique_weapons_required":
+                bool(
+                    self.options
+                        .unique_weapons_required
+                        .value
+                ),
+
+            "starting_costume":
+                self.starting_costume_id,
         }

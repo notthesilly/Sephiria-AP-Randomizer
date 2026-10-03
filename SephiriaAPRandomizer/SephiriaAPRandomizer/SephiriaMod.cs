@@ -36,11 +36,13 @@ namespace SephiriaAPRandomizer
         public static int GoalChapter { get; private set; }
         public static int RequiredChapterClears { get; private set; }
         public static bool UniqueWeaponsRequired { get; private set; }
+        public static string StartingCostumeId { get; private set; }
         public static int CompletedChapterClears { get; private set; }
         public static bool Chapter2EndingReached { get; set; }
         public static bool ArchipelagoGoalPending { get; set; }
 
         private static bool hardModeSyncPending;
+        private static bool permanentItemSyncPending;
 
         public const string ArchipelagoShrineMarker = "__SEPHIRIA_ARCHIPELAGO_SHRINE__";
         public const string ArchipelagoShrineUsedMarker = "__SEPHIRIA_ARCHIPELAGO_SHRINE_USED__";
@@ -54,6 +56,7 @@ namespace SephiriaAPRandomizer
         private const string ArchipelagoSephiriteChoicesSavedPrefix = "ArchipelagoSephiriteChoicesSaved_";
         private const string ArchipelagoSephiriteClaimedPrefix = "ArchipelagoSephiriteClaimed_";
         private const string ArchipelagoSephiritePendingClaimPrefix = "ArchipelagoSephiritePendingClaim_";
+
         private static readonly HashSet<int> activeArchipelagoSephiriteRuntimeInstances = new HashSet<int>();
         private static readonly HashSet<int> blockedArchipelagoSephiriteRuntimeInstances = new HashSet<int>();
         private static readonly Dictionary<int, long> archipelagoSephiriteLocationByRewardInstanceId = new Dictionary<int, long>();
@@ -61,6 +64,63 @@ namespace SephiriaAPRandomizer
         private static readonly Dictionary<int, string> archipelagoSephiriteRuntimeIdentities = new Dictionary<int, string>();
         private sealed class ArchipelagoScoutedItemData{ public string ItemName; public string PlayerName; public string GameName; public int Flags; }
         private static readonly Dictionary<long, ArchipelagoScoutedItemData> archipelagoSephiriteScoutedItems = new Dictionary<long, ArchipelagoScoutedItemData>();
+        private static readonly Dictionary<string, string>
+            archipelagoCostumeItems =
+                new Dictionary<string, string>
+                {
+                    { "Pink Bunny", "PinkRabbit" },
+                    { "Armored Bunny", "ArmoredRabbit" },
+                    { "Brown Rabbit", "BrownRabbit" },
+                    { "Braided Hair Rabbit", "DarkBrownRabbit" },
+                    { "Orange Rabbit", "MandarinRabbit" },
+                    { "Red-Hooded Rabbit", "RedHolyRabbit" },
+                    { "White Rabbit", "WhiteRabbit" },
+                    { "Wing-Eared Rabbit", "HolyRabbit" },
+
+                    { "Red-Clothed Cat", "FireCat" },
+                    { "Red Fox", "Fox" },
+                    { "Frog", "Frog" },
+                    { "Mole", "Mole" },
+                    { "Otter", "Otter" },
+                    { "White Wolf", "WhiteWolf" },
+                    { "Wizard Bunny", "WizardRabbit" },
+                    { "Eagle", "Bird" },
+                    { "Crocodile", "Crocodile" },
+                    { "Deer", "Deer" },
+                    { "Fairy of Fortune", "Luck" },
+                    { "Farmer Squirrel", "Squirrel" },
+                    { "Turtle", "Turtle" },
+                    { "Forest Cat", "ForestCat" },
+                    { "Ghost", "Ghost" },
+                    { "Scholar Lizard", "Seren" },
+
+                    { "Wingless Bat", "Bat" },
+                    { "Skeleton", "Skeleton" },
+                    { "Adventurer Bunny", "AdventurerRabbit" }
+                };
+        private static readonly Dictionary<string, long>
+            archipelagoCostumeMissionLocations =
+                new Dictionary<string, long>
+                {
+                    { "FireCat", 2001 },
+                    { "Fox", 2002 },
+                    { "Frog", 2003 },
+                    { "Mole", 2004 },
+                    { "Otter", 2005 },
+                    { "WhiteWolf", 2006 },
+                    { "WizardRabbit", 2007 },
+                    { "Bird", 2008 },
+                    { "Crocodile", 2009 },
+                    { "Deer", 2010 },
+                    { "Luck", 2011 },
+                    { "Squirrel", 2012 },
+                    { "Turtle", 2013 },
+                    { "ForestCat", 2014 },
+                    { "Ghost", 2015 },
+                    { "Seren", 2016 },
+                    { "Skeleton", 2017 },
+                    { "Bat", 2018 }
+                };
         private static readonly FieldInfo sephiriteRerollButtonGroupField = AccessTools.Field(typeof(UI_SephiriteRewardPanel), "rerollButtonGroup");
         private static readonly FieldInfo sephiriteSkipSelectButtonGroupField = AccessTools.Field(typeof(UI_SephiriteRewardPanel), "skipSelectButtonGroup");
         private static readonly FieldInfo sephiriteConvertRerollDiceButtonGroupField = AccessTools.Field(typeof(UI_SephiriteRewardPanel), "convertRerollDiceButtonGroup");
@@ -72,9 +132,9 @@ namespace SephiriaAPRandomizer
         private static UnityEngine.Sprite archipelagoSephiriteOutlineSprite;
         private static UnityEngine.Sprite archipelagoSaveProfileSprite;
         private static UnityEngine.Sprite archipelagoSaveProfileOutlineSprite;
-
         private static bool wasArchipelagoConnected;
         private static bool disconnectMessageShown;
+
         public static bool IsArchipelagoConnected
         {
             get
@@ -3248,6 +3308,7 @@ namespace SephiriaAPRandomizer
             GoalChapter = 0;
             RequiredChapterClears = 0;
             UniqueWeaponsRequired = false;
+            StartingCostumeId = null;
             CompletedChapterClears = 0;
 
             Chapter2EndingReached = false;
@@ -3265,6 +3326,7 @@ namespace SephiriaAPRandomizer
             ResetArchipelagoShrineRunState();
 
             hardModeSyncPending = false;
+            permanentItemSyncPending = false;
 
             wasArchipelagoConnected = false;
             disconnectMessageShown = false;
@@ -3297,6 +3359,7 @@ namespace SephiriaAPRandomizer
                 }
 
                 QueueHardModeSync();
+                QueuePermanentItemSync();
             };
 
             MelonLogger.Msg("Connecting to Archipelago...");
@@ -3331,6 +3394,15 @@ namespace SephiriaAPRandomizer
                     Convert.ToBoolean(
                         loginSuccess.SlotData["unique_weapons_required"]
                     );
+
+                StartingCostumeId =
+                    Convert.ToString(
+                        loginSuccess.SlotData["starting_costume"]
+                    );
+
+                MelonLogger.Msg(
+                    $"AP Starting Costume: {StartingCostumeId}"
+                );
 
                 apSession
                     .DataStorage["sephiria_completed_chapter_clears"]
@@ -3381,6 +3453,7 @@ namespace SephiriaAPRandomizer
                 await ScoutArchipelagoSephiriteItems(apSession);
 
                 QueueHardModeSync();
+                QueuePermanentItemSync();
 
                 return true;
             }
@@ -3422,6 +3495,14 @@ namespace SephiriaAPRandomizer
                 return;
 
             hardModeSyncPending = true;
+        }
+
+        public static void QueuePermanentItemSync()
+        {
+            if (!IsArchipelagoSave)
+                return;
+
+            permanentItemSyncPending = true;
         }
 
         private static void SetSephiritePanelGroupActive(
@@ -3526,6 +3607,14 @@ namespace SephiriaAPRandomizer
                         panel.skipGuide.SetActive(false);
                     }
                 }
+            }
+
+            if (permanentItemSyncPending &&
+                SaveManager.Current != null)
+            {
+                permanentItemSyncPending = false;
+
+                ApplyArchipelagoPermanentItemState();
             }
 
             if (!hardModeSyncPending)
@@ -3650,6 +3739,232 @@ namespace SephiriaAPRandomizer
                     );
                 }
             }
+        }
+
+        // Permanent Item Stuff
+
+        private static void ApplyArchipelagoPermanentItemState()
+        {
+            if (!IsArchipelagoSave)
+                return;
+
+            if (SaveManager.Current == null)
+                return;
+
+            ArchipelagoSession apSession =
+                session as ArchipelagoSession;
+
+            if (apSession == null)
+                return;
+
+            HashSet<string> ownedCostumeIds =
+                new HashSet<string>(
+                    StringComparer.Ordinal
+                );
+
+            // Starting costume.
+            if (!string.IsNullOrEmpty(StartingCostumeId))
+            {
+                ownedCostumeIds.Add(
+                    StartingCostumeId
+                );
+            }
+
+            // Received costume items.
+            foreach (var receivedItem
+                in apSession.Items.AllItemsReceived)
+            {
+                if (receivedItem == null)
+                    continue;
+
+                string costumeId;
+
+                if (!archipelagoCostumeItems.TryGetValue(
+                        receivedItem.ItemName,
+                        out costumeId))
+                {
+                    continue;
+                }
+
+                ownedCostumeIds.Add(
+                    costumeId
+                );
+            }
+
+            // ---------------------------------------------
+            // Runtime ownership
+            // ---------------------------------------------
+
+            if (CombatManager.Instance != null)
+            {
+                foreach (KeyValuePair<string, string> costume
+                    in archipelagoCostumeItems)
+                {
+                    string costumeId =
+                        costume.Value;
+
+                    bool shouldBeUnlocked =
+                        ownedCostumeIds.Contains(
+                            costumeId
+                        );
+
+                    bool currentlyUnlocked =
+                        CostumeDatabase.IsUnlocked(
+                            costumeId
+                        );
+
+                    if (shouldBeUnlocked &&
+                        !currentlyUnlocked)
+                    {
+                        CostumeDatabase.UnlockCostume(
+                            costumeId
+                        );
+
+                        MelonLogger.Msg(
+                            $"[AP Costume] {costumeId} = True"
+                        );
+                    }
+                    else if (!shouldBeUnlocked &&
+                             currentlyUnlocked)
+                    {
+                        CostumeDatabase.LockCostume(
+                            costumeId
+                        );
+
+                        MelonLogger.Msg(
+                            $"[AP Costume] {costumeId} = False"
+                        );
+                    }
+                }
+            }
+
+            // ---------------------------------------------
+            // Make sure an AP save isn't configured to use
+            // a costume it does not own.
+            // ---------------------------------------------
+
+            bool saveChanged = false;
+
+            string equippedCostume =
+                SaveManager.Current.GetString(
+                    "PlayerCostume",
+                    ""
+                );
+
+            if (!string.IsNullOrEmpty(StartingCostumeId) &&
+                !ownedCostumeIds.Contains(equippedCostume))
+            {
+                SaveManager.Current.SetString(
+                    "PlayerCostume",
+                    StartingCostumeId
+                );
+
+                saveChanged = true;
+
+                MelonLogger.Msg(
+                    $"[AP Costume] Equipped starting costume: " +
+                    $"{StartingCostumeId}"
+                );
+            }
+
+            if (saveChanged)
+            {
+                SaveManager.Save(
+                    saveCurrent: true,
+                    saveCurrentRun: false
+                );
+            }
+
+            MelonLogger.Msg(
+                $"[AP Costume] Ownership synchronized. " +
+                $"Owned={ownedCostumeIds.Count}, " +
+                $"Starting={StartingCostumeId}, " +
+                $"RuntimeReady={CombatManager.Instance != null}"
+            );
+        }
+
+        public static void PrepareArchipelagoCostumeMissionTrackers()
+        {
+            if (!IsArchipelagoSave)
+                return;
+
+            if (SaveManager.Current == null)
+                return;
+
+            foreach (string costumeId
+                in archipelagoCostumeMissionLocations.Keys)
+            {
+                SaveManager.Current.SetBool(
+                    "Costume_Unlocked_" + costumeId,
+                    false
+                );
+            }
+        }
+
+        public static bool TryCompleteArchipelagoCostumeMission(
+            string costumeId)
+        {
+            if (!IsArchipelagoSave)
+                return false;
+
+            long locationId;
+
+            if (!archipelagoCostumeMissionLocations.TryGetValue(
+                    costumeId,
+                    out locationId))
+            {
+                return false;
+            }
+
+            ArchipelagoSession apSession =
+                session as ArchipelagoSession;
+
+            if (apSession == null ||
+                !apSession.Socket.Connected)
+            {
+                MelonLogger.Warning(
+                    $"[AP Costume Mission] Cannot check " +
+                    $"{costumeId}: Archipelago is disconnected."
+                );
+
+                return false;
+            }
+
+            // Already completed.
+            if (!apSession.Locations
+                    .AllMissingLocations
+                    .Contains(locationId))
+            {
+                return true;
+            }
+
+            string locationName =
+                apSession.Locations.GetLocationNameFromId(
+                    locationId,
+                    "Sephiria"
+                );
+
+            try
+            {
+                apSession.Locations.CompleteLocationChecks(
+                    locationId
+                );
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Error(
+                    $"[AP Costume Mission] Failed to check " +
+                    $"{locationName}: {ex.Message}"
+                );
+
+                return false;
+            }
+
+            MelonLogger.Msg(
+                $"[AP Costume Mission] Checked {locationName}."
+            );
+
+            return true;
         }
 
         private static void RefreshArchipelagoDeclineRuntimeStatus()
@@ -4395,6 +4710,16 @@ namespace SephiriaAPRandomizer
 
                 return false;
             }
+
+            // AP Fairy of Fortune mission:
+            // clear the game on any chapter.
+            //
+            // This happens before the unique-weapon check intentionally.
+            // Even a clear using an already-used weapon still satisfies
+            // the costume mission.
+            TryCompleteArchipelagoCostumeMission(
+                "Luck"
+            );
 
             if (UniqueWeaponsRequired)
             {
@@ -5288,6 +5613,42 @@ public static class ArchipelagoSaveProfileButtonPatch
 
         eventTrigger.triggers.Add(enterEntry);
 
+        // Controller/keyboard selection.
+        UnityEngine.EventSystems.EventTrigger.Entry selectEntry =
+            new UnityEngine.EventSystems.EventTrigger.Entry();
+
+        selectEntry.eventID =
+            UnityEngine.EventSystems.EventTriggerType.Select;
+
+        selectEntry.callback.AddListener(
+            delegate (UnityEngine.EventSystems.BaseEventData _)
+            {
+                if (apOutlineSprite != null)
+                {
+                    iconImage.sprite =
+                        apOutlineSprite;
+                }
+            }
+        );
+
+        eventTrigger.triggers.Add(selectEntry);
+
+        UnityEngine.EventSystems.EventTrigger.Entry deselectEntry =
+            new UnityEngine.EventSystems.EventTrigger.Entry();
+
+        deselectEntry.eventID =
+            UnityEngine.EventSystems.EventTriggerType.Deselect;
+
+        deselectEntry.callback.AddListener(
+            delegate (UnityEngine.EventSystems.BaseEventData _)
+            {
+                iconImage.sprite =
+                    apSprite;
+            }
+        );
+
+        eventTrigger.triggers.Add(deselectEntry);
+
         UnityEngine.EventSystems.EventTrigger.Entry exitEntry =
             new UnityEngine.EventSystems.EventTrigger.Entry();
 
@@ -5512,6 +5873,59 @@ public static class NewGamePatch
     {
         if (!SephiriaMod.IsArchipelagoSave)
             return;
+
+        SaveManager.Current.SetBool(
+            "HardModeUnlockTutorial",
+            true
+        );
+
+        SaveManager.Current.SetBool(
+            "MapTutorial",
+            false
+        );
+
+        SaveManager.Current.SetBool(
+            "SephiriteOpenVeryFirst",
+            false
+        );
+
+        SaveManager.CurrentRun.SetInt(
+            "Library_FirstEventIdx",
+            4
+        );
+
+        SaveManager.Current.SetBool(
+            "AltarOfEnchantTutorialEnd",
+            true
+        );
+
+        SaveManager.Current.SetBool(
+            "MysticPotTutorialEnd",
+            true
+        );
+
+        SaveManager.Current.SetBool(
+            "TabletMixTutorial",
+            false
+        );
+
+        SaveManager.Current.SetBool(
+            "Chapter3Tutorial_DungeonChange",
+            false
+        );
+
+        SaveManager.Current.SetBool(
+            "TabletMixTutorial",
+            false
+        );
+
+        if (SephiriaMod.GoalChapter >= 4)
+        {
+            SaveManager.Current.SetBool(
+                "SawChapter4GrasstownTutorial",
+                true
+            );
+        }
 
         SephiriaMod.ResetArchipelagoShrineRunState();
 
@@ -6153,6 +6567,27 @@ public static class ChangeChapterBlockPatch
         }
 
         return true;
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_HardModePanel),
+    "OnOpened"
+)]
+public static class ArchipelagoHardModePanelTutorialPatch
+{
+    public static void Prefix()
+    {
+        if (!SephiriaMod.IsArchipelagoSave ||
+            SaveManager.Current == null)
+        {
+            return;
+        }
+
+        SaveManager.Current.SetBool(
+            "HardModePanel_FirstOpen",
+            false
+        );
     }
 }
 
@@ -7954,6 +8389,395 @@ public static class ArchipelagoLevelUpStageTransitionPatch
                 );
         }
 
+        return false;
+    }
+}
+
+[HarmonyPatch(typeof(HardModePropActivator), "Update")]
+public static class ArchipelagoHardModePropPatch
+{
+    public static bool Prefix(HardModePropActivator __instance)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        if (__instance.isServer &&
+            !__instance.isPropActive)
+        {
+            __instance.NetworkisPropActive = true;
+        }
+
+        return false;
+    }
+}
+
+[HarmonyPatch(typeof(OpenHardModePanel), "Update")]
+public static class ArchipelagoHardModePopupPatch
+{
+    public static bool Prefix()
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        return false;
+    }
+}
+
+[HarmonyPatch(typeof(OpenMultiplayerPanel), "Update")]
+public static class ArchipelagoMultiplayerPopupPatch
+{
+    public static bool Prefix()
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        return false;
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_SaveProfilePanel),
+    "OnOpened"
+)]
+public static class ArchipelagoSaveProfileNavigationPatch
+{
+    public static void Postfix(
+        UI_SaveProfilePanel __instance)
+    {
+        if (__instance == null ||
+            __instance.buttons == null)
+        {
+            return;
+        }
+
+        // ---------------------------------------------------------
+        // Trash buttons
+        // ---------------------------------------------------------
+        for (int i = 0;
+             i < __instance.buttons.Length;
+             i++)
+        {
+            UI_SaveProfileButton profile =
+                __instance.buttons[i];
+
+            if (profile == null ||
+                profile.deleteButton == null ||
+                !profile.deleteButton.activeInHierarchy)
+            {
+                continue;
+            }
+
+            UnityEngine.UI.Selectable trash =
+                profile.deleteButton.GetComponent<
+                    UnityEngine.UI.Selectable
+                >();
+
+            if (trash == null)
+                continue;
+
+            UnityEngine.UI.Selectable startButton =
+                FindStartButton(profile);
+
+            UnityEngine.UI.Selectable apButton = null;
+
+            Transform iconTransform =
+                profile.transform.Find(
+                    "ArchipelagoSaveIcon"
+                );
+
+            if (iconTransform != null &&
+                iconTransform.gameObject.activeInHierarchy)
+            {
+                apButton =
+                    iconTransform.GetComponent<
+                        UnityEngine.UI.Selectable
+                    >();
+            }
+
+            UnityEngine.UI.Selectable up =
+                trash.FindSelectableOnUp();
+
+            UnityEngine.UI.Selectable left =
+                FindTrashButton(
+                    __instance,
+                    i,
+                    -1
+                );
+
+            UnityEngine.UI.Selectable right =
+                FindTrashButton(
+                    __instance,
+                    i,
+                    1
+                );
+
+            UnityEngine.UI.Navigation navigation =
+                trash.navigation;
+
+            navigation.mode =
+                UnityEngine.UI.Navigation.Mode.Explicit;
+
+            navigation.selectOnLeft = left;
+            navigation.selectOnRight = right;
+            navigation.selectOnUp = up;
+
+            // AP save: Trash -> AP Icon
+            // Normal save: Trash -> Start Game
+            navigation.selectOnDown =
+                apButton != null
+                    ? apButton
+                    : startButton;
+
+            trash.navigation = navigation;
+
+
+        }
+
+        // ---------------------------------------------------------
+        // Archipelago logo buttons
+        // ---------------------------------------------------------
+        for (int i = 0;
+             i < __instance.buttons.Length;
+             i++)
+        {
+            UI_SaveProfileButton profile =
+                __instance.buttons[i];
+
+            if (profile == null)
+                continue;
+
+            Transform iconTransform =
+                profile.transform.Find(
+                    "ArchipelagoSaveIcon"
+                );
+
+            if (iconTransform == null ||
+                !iconTransform.gameObject.activeInHierarchy)
+            {
+                continue;
+            }
+
+            UnityEngine.UI.Selectable apButton =
+                iconTransform.GetComponent<
+                    UnityEngine.UI.Selectable
+                >();
+
+            if (apButton == null)
+                continue;
+
+            UnityEngine.UI.Selectable startButton =
+                FindStartButton(profile);
+
+            UnityEngine.UI.Selectable up =
+                apButton.FindSelectableOnUp();
+
+            UnityEngine.UI.Selectable left =
+                FindArchipelagoButton(
+                    __instance,
+                    i,
+                    -1
+                );
+
+            UnityEngine.UI.Selectable right =
+                FindArchipelagoButton(
+                    __instance,
+                    i,
+                    1
+                );
+
+            UnityEngine.UI.Navigation navigation =
+                apButton.navigation;
+
+            navigation.mode =
+                UnityEngine.UI.Navigation.Mode.Explicit;
+
+            navigation.selectOnLeft = left;
+            navigation.selectOnRight = right;
+            navigation.selectOnUp = up;
+
+            // AP Icon -> Start Game
+            navigation.selectOnDown = startButton;
+
+            apButton.navigation = navigation;
+        }
+    }
+
+    private static UnityEngine.UI.Selectable FindStartButton(
+        UI_SaveProfileButton profile)
+    {
+        UnityEngine.UI.Selectable[] selectables =
+            profile.GetComponentsInChildren<
+                UnityEngine.UI.Selectable
+            >(true);
+
+        foreach (UnityEngine.UI.Selectable selectable
+                 in selectables)
+        {
+            if (selectable != null &&
+                selectable.gameObject.name == "Button")
+            {
+                return selectable;
+            }
+        }
+
+        return null;
+    }
+
+    private static UnityEngine.UI.Selectable FindTrashButton(
+        UI_SaveProfilePanel panel,
+        int startIndex,
+        int direction)
+    {
+        for (int i = startIndex + direction;
+             i >= 0 && i < panel.buttons.Length;
+             i += direction)
+        {
+            UI_SaveProfileButton profile =
+                panel.buttons[i];
+
+            if (profile == null ||
+                profile.deleteButton == null ||
+                !profile.deleteButton.activeInHierarchy)
+            {
+                continue;
+            }
+
+            UnityEngine.UI.Selectable selectable =
+                profile.deleteButton.GetComponent<
+                    UnityEngine.UI.Selectable
+                >();
+
+            if (selectable != null)
+                return selectable;
+        }
+
+        return null;
+    }
+
+    private static UnityEngine.UI.Selectable FindArchipelagoButton(
+        UI_SaveProfilePanel panel,
+        int startIndex,
+        int direction)
+    {
+        for (int i = startIndex + direction;
+             i >= 0 && i < panel.buttons.Length;
+             i += direction)
+        {
+            UI_SaveProfileButton profile =
+                panel.buttons[i];
+
+            if (profile == null)
+                continue;
+
+            Transform iconTransform =
+                profile.transform.Find(
+                    "ArchipelagoSaveIcon"
+                );
+
+            if (iconTransform == null ||
+                !iconTransform.gameObject.activeInHierarchy)
+            {
+                continue;
+            }
+
+            UnityEngine.UI.Selectable selectable =
+                iconTransform.GetComponent<
+                    UnityEngine.UI.Selectable
+                >();
+
+            if (selectable != null)
+                return selectable;
+        }
+
+        return null;
+    }
+}
+
+[HarmonyPatch(
+    typeof(CostumeUnlockEntity),
+    nameof(CostumeUnlockEntity.Unlock)
+)]
+public static class ArchipelagoCostumeVanillaUnlockPatch
+{
+    public static bool Prefix(
+        CostumeUnlockEntity __instance
+    )
+    {
+        // Normal saves retain completely vanilla
+        // costume behavior.
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        // On AP saves, costume missions must not
+        // directly award their vanilla costumes.
+        //
+        // The mission will become an AP location check
+        // in the next step.
+        return false;
+    }
+}
+
+[HarmonyPatch(
+    typeof(CombatManager),
+    nameof(CombatManager.SetCurrentPlayer)
+)]
+public static class ArchipelagoCostumePlayerLoadedPatch
+{
+    public static void Prefix()
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        // These vanilla flags mean "mission already completed".
+        // AP ownership must never suppress the mission trackers.
+        SephiriaMod.PrepareArchipelagoCostumeMissionTrackers();
+    }
+
+    public static void Postfix()
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        SephiriaMod.QueuePermanentItemSync();
+    }
+}
+
+[HarmonyPatch(
+    typeof(CostumeUnlockEntity),
+    nameof(CostumeUnlockEntity.Unlock)
+)]
+public static class ArchipelagoCostumeMissionPatch
+{
+    public static bool Prefix(
+        CostumeUnlockEntity __instance
+    )
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        if (__instance == null ||
+            __instance.unlockCostume == null)
+        {
+            return false;
+        }
+
+        string costumeId =
+            __instance.unlockCostume.id;
+
+        // Fairy of Fortune is special in AP.
+        //
+        // Vanilla unlocks it from Chapter 4 completion, but our
+        // AP mission is "clear the game on any chapter".
+        // Therefore the vanilla Luck trigger must NEVER send
+        // the AP location.
+        if (costumeId == "Luck")
+            return false;
+
+        SephiriaMod.TryCompleteArchipelagoCostumeMission(
+            costumeId
+        );
+
+        // Never grant the vanilla costume.
         return false;
     }
 }

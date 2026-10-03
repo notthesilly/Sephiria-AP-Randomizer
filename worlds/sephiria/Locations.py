@@ -76,7 +76,29 @@ for floor_number in range(1, 7):
 
         next_location_id += 1
 
+costume_mission_location_table = {
+    "Costume Mission - Red-Clothed Cat": 2001,
+    "Costume Mission - Red Fox": 2002,
+    "Costume Mission - Frog": 2003,
+    "Costume Mission - Mole": 2004,
+    "Costume Mission - Otter": 2005,
+    "Costume Mission - White Wolf": 2006,
+    "Costume Mission - Wizard Bunny": 2007,
+    "Costume Mission - Eagle": 2008,
+    "Costume Mission - Crocodile": 2009,
+    "Costume Mission - Deer": 2010,
+    "Costume Mission - Fairy of Fortune": 2011,
+    "Costume Mission - Farmer Squirrel": 2012,
+    "Costume Mission - Turtle": 2013,
+    "Costume Mission - Forest Cat": 2014,
+    "Costume Mission - Ghost": 2015,
+    "Costume Mission - Scholar Lizard": 2016,
+    "Costume Mission - Skeleton": 2017,
+    "Costume Mission - Wingless Bat": 2018,
+}
 
 location_table = {
-    **shrine_location_table, **sephirite_location_table
+    **shrine_location_table,
+    **sephirite_location_table,
+    **costume_mission_location_table,
 }
