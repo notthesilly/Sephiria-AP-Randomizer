@@ -53,6 +53,19 @@ item_table = {
     "Wingless Bat": 43,
     "Skeleton": 44,
     "Adventurer Bunny": 45,
+
+    # Permanent reward unlocks
+    "Golden Needle": 46,
+    "Boss Reward Unlock: Mogdi": 47,
+    "Boss Reward Unlock: Rataka": 48,
+    "Boss Reward Unlock: Erma": 49,
+    "Boss Reward Unlock: Askard": 50,
+    "Boss Reward Unlock: Odner": 51,
+    "Boss Reward Unlock: Lerid": 52,
+    "Boss Reward Unlock: Pentaxis": 53,
+    "Boss Reward Unlock: Kovess": 54,
+    "Boss Reward Unlock: Kraz": 55,
+    "Boss Reward Unlock: Haz": 56,
 }
 
 
@@ -106,4 +119,20 @@ hard_mode_reduction_counts = {
     "Severed Exchange Reduction": 2,
     "Rebellion of Machines Reduction": 2,
     "Proliferation Reduction": 2,
+}
+
+
+# AP permanent reward item -> Sephiria TreeShopItemEntity ID
+permanent_reward_item_to_tree_shop_id = {
+    "Golden Needle": 3001,
+    "Boss Reward Unlock: Mogdi": 2000,
+    "Boss Reward Unlock: Rataka": 2001,
+    "Boss Reward Unlock: Erma": 2002,
+    "Boss Reward Unlock: Askard": 2003,
+    "Boss Reward Unlock: Odner": 2004,
+    "Boss Reward Unlock: Lerid": 2005,
+    "Boss Reward Unlock: Pentaxis": 2006,
+    "Boss Reward Unlock: Kovess": 2007,
+    "Boss Reward Unlock: Kraz": 2008,
+    "Boss Reward Unlock: Haz": 2009,
 }

@@ -7,7 +7,8 @@ from .Items import (
     SephiriaItem,
     item_table,
     hard_mode_reduction_counts,
-    costume_item_to_id
+    costume_item_to_id,
+    permanent_reward_item_to_tree_shop_id
 )
 
 from .Locations import (
@@ -190,6 +191,20 @@ class SephiriaWorld(World):
             self.multiworld.itempool.append(item)
 
         # -------------------------------------------------
+        # Permanent reward unlocks
+        # -------------------------------------------------
+
+        for item_name in permanent_reward_item_to_tree_shop_id:
+            item = SephiriaItem(
+                item_name,
+                ItemClassification.useful,
+                item_table[item_name],
+                self.player
+            )
+
+            self.multiworld.itempool.append(item)
+
+        # -------------------------------------------------
         # Fill remaining locations
         # -------------------------------------------------
 
@@ -197,9 +212,14 @@ class SephiriaWorld(World):
             len(costume_names) - 1
         )
 
+        permanent_reward_item_count = len(
+            permanent_reward_item_to_tree_shop_id
+        )
+
         required_item_count = (
             len(reduction_pool) +
-            costume_item_count
+            costume_item_count +
+            permanent_reward_item_count
         )
 
         if total_location_count < required_item_count:

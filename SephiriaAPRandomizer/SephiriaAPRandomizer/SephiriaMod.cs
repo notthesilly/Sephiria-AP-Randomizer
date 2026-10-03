@@ -13,7 +13,10 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
+using TMPro;
 using UnityEngine;
+using UnityEngine.InputSystem;
+using UnityEngine.UI;
 
 [assembly: MelonInfo(
     typeof(SephiriaAPRandomizer.SephiriaMod),
@@ -43,6 +46,7 @@ namespace SephiriaAPRandomizer
 
         private static bool hardModeSyncPending;
         private static bool permanentItemSyncPending;
+        public static bool IsBuildingArchipelagoCostumePanel;
 
         public const string ArchipelagoShrineMarker = "__SEPHIRIA_ARCHIPELAGO_SHRINE__";
         public const string ArchipelagoShrineUsedMarker = "__SEPHIRIA_ARCHIPELAGO_SHRINE_USED__";
@@ -56,7 +60,7 @@ namespace SephiriaAPRandomizer
         private const string ArchipelagoSephiriteChoicesSavedPrefix = "ArchipelagoSephiriteChoicesSaved_";
         private const string ArchipelagoSephiriteClaimedPrefix = "ArchipelagoSephiriteClaimed_";
         private const string ArchipelagoSephiritePendingClaimPrefix = "ArchipelagoSephiritePendingClaim_";
-
+        
         private static readonly HashSet<int> activeArchipelagoSephiriteRuntimeInstances = new HashSet<int>();
         private static readonly HashSet<int> blockedArchipelagoSephiriteRuntimeInstances = new HashSet<int>();
         private static readonly Dictionary<int, long> archipelagoSephiriteLocationByRewardInstanceId = new Dictionary<int, long>();
@@ -64,6 +68,7 @@ namespace SephiriaAPRandomizer
         private static readonly Dictionary<int, string> archipelagoSephiriteRuntimeIdentities = new Dictionary<int, string>();
         private sealed class ArchipelagoScoutedItemData{ public string ItemName; public string PlayerName; public string GameName; public int Flags; }
         private static readonly Dictionary<long, ArchipelagoScoutedItemData> archipelagoSephiriteScoutedItems = new Dictionary<long, ArchipelagoScoutedItemData>();
+        private static readonly Dictionary<long, ArchipelagoScoutedItemData> archipelagoCostumeMissionScoutedItems = new Dictionary<long, ArchipelagoScoutedItemData>();
         private static readonly Dictionary<string, string>
             archipelagoCostumeItems =
                 new Dictionary<string, string>
@@ -121,6 +126,72 @@ namespace SephiriaAPRandomizer
                     { "Skeleton", 2017 },
                     { "Bat", 2018 }
                 };
+        private static readonly Dictionary<string, string>
+            archipelagoCostumeMissionNames =
+                new Dictionary<string, string>
+                {
+                    { "FireCat", "Red-Clothed Cat" },
+                    { "Fox", "Red Fox" },
+                    { "Frog", "Frog" },
+                    { "Mole", "Mole" },
+                    { "Otter", "Otter" },
+                    { "WhiteWolf", "White Wolf" },
+                    { "WizardRabbit", "Wizard Bunny" },
+                    { "Bird", "Eagle" },
+                    { "Crocodile", "Crocodile" },
+                    { "Deer", "Deer" },
+                    { "Luck", "Fairy of Fortune" },
+                    { "Squirrel", "Farmer Squirrel" },
+                    { "Turtle", "Turtle" },
+                    { "ForestCat", "Forest Cat" },
+                    { "Ghost", "Ghost" },
+                    { "Seren", "Scholar Lizard" },
+                    { "Skeleton", "Skeleton" },
+                    { "Bat", "Wingless Bat" }
+                };
+        private static readonly Dictionary<string, string>
+            archipelagoCostumeMissionDescriptions =
+                new Dictionary<string, string>
+                {
+                    { "FireCat", "Raise your Fire Damage up to 50" },
+                    { "Fox", "Obtain at least 10 tablets in a single adventure" },
+                    { "Frog", "Raise your Lightning Damage up to 50" },
+                    { "Mole", "Defeat 300 fanatic moles" },
+                    { "Otter", "Increase Critical Damage to 175%" },
+                    { "WhiteWolf", "Defeat Rataka, pillager leader at least 5 times" },
+                    { "WizardRabbit", "Defeat enemies 50 times with a grimoire" },
+                    { "Bird", "Increase dash count to 8" },
+                    { "Crocodile", "Clear the game after achieving 10 Guardian combos" },
+                    { "Deer", "Clear the game without using the Wishing Fountain" },
+                    { "Luck", "Clear the game on any chapter" },
+                    { "Squirrel", "Clear the game without using a fruit skewer" },
+                    { "Turtle", "Have 12 artifacts reach max level in a single adventure" },
+                    { "ForestCat", "Collect 2500 leaf" },
+                    { "Ghost", "Obtain at least 5 grimoires in a single adventure" },
+                    { "Seren", "Clear hard mode at tier 20 or above" },
+                    { "Skeleton", "Take 333 damage in a single adventure" },
+                    { "Bat", "Use the blood donation shrine 5 times" }
+                };
+        private static readonly Dictionary<string, int>
+            archipelagoPermanentRewardItems =
+                new Dictionary<string, int>(
+                    StringComparer.Ordinal
+                )
+                {
+                    { "Golden Needle", 3001 },
+
+                    { "Boss Reward Unlock: Mogdi", 2000 },
+                    { "Boss Reward Unlock: Rataka", 2001 },
+                    { "Boss Reward Unlock: Erma", 2002 },
+                    { "Boss Reward Unlock: Askard", 2003 },
+                    { "Boss Reward Unlock: Odner", 2004 },
+                    { "Boss Reward Unlock: Lerid", 2005 },
+                    { "Boss Reward Unlock: Pentaxis", 2006 },
+                    { "Boss Reward Unlock: Kovess", 2007 },
+                    { "Boss Reward Unlock: Kraz", 2008 },
+                    { "Boss Reward Unlock: Haz", 2009 }
+                };
+        private static readonly HashSet<int> archipelagoPermanentRewardTreeShopIds = new HashSet<int>(archipelagoPermanentRewardItems.Values);
         private static readonly FieldInfo sephiriteRerollButtonGroupField = AccessTools.Field(typeof(UI_SephiriteRewardPanel), "rerollButtonGroup");
         private static readonly FieldInfo sephiriteSkipSelectButtonGroupField = AccessTools.Field(typeof(UI_SephiriteRewardPanel), "skipSelectButtonGroup");
         private static readonly FieldInfo sephiriteConvertRerollDiceButtonGroupField = AccessTools.Field(typeof(UI_SephiriteRewardPanel), "convertRerollDiceButtonGroup");
@@ -2700,7 +2771,6 @@ namespace SephiriaAPRandomizer
             return true;
         }
 
-
         public static bool TryCompleteArchipelagoSephiriteChoice(
             int rewardInstanceId,
             out string locationName)
@@ -2755,6 +2825,77 @@ namespace SephiriaAPRandomizer
             return true;
         }
 
+        public static bool TryGetArchipelagoCostumeMissionInfo(
+            string costumeId,
+            out string description,
+            out bool completed,
+            out string sentItem)
+        {
+            description = null;
+            completed = false;
+            sentItem = null;
+
+            if (!IsArchipelagoSave)
+                return false;
+
+            long locationId;
+
+            if (!archipelagoCostumeMissionLocations.TryGetValue(
+                    costumeId,
+                    out locationId))
+            {
+                return false;
+            }
+
+            if (!archipelagoCostumeMissionDescriptions.TryGetValue(
+                    costumeId,
+                    out description))
+            {
+                return false;
+            }
+
+            ArchipelagoSession apSession =
+                session as ArchipelagoSession;
+
+            if (apSession == null ||
+                !apSession.Socket.Connected)
+            {
+                return false;
+            }
+
+            completed =
+                !apSession.Locations
+                    .AllMissingLocations
+                    .Contains(locationId);
+
+            // Do NOT reveal the randomized reward
+            // until this mission has been completed.
+            if (!completed)
+                return true;
+
+            ArchipelagoScoutedItemData itemData;
+
+            if (archipelagoCostumeMissionScoutedItems.TryGetValue(
+                    locationId,
+                    out itemData) &&
+                itemData != null &&
+                !string.IsNullOrEmpty(itemData.ItemName))
+            {
+                sentItem = itemData.ItemName;
+
+                // Important for multiworld:
+                // show who the item was sent to when it
+                // wasn't simply our own reward.
+                if (!string.IsNullOrEmpty(itemData.PlayerName))
+                {
+                    sentItem +=
+                        " → " +
+                        itemData.PlayerName;
+                }
+            }
+
+            return true;
+        }
 
         public static void ClearArchipelagoSephiriteRuntimeState(
             Sephirite sephirite)
@@ -2934,6 +3075,76 @@ namespace SephiriaAPRandomizer
             {
                 MelonLogger.Warning(
                     "[AP Sephirite] Could not scout item names: " +
+                    ex.Message
+                );
+            }
+        }
+
+        private static async Task ScoutArchipelagoCostumeMissionItems(
+            ArchipelagoSession apSession)
+        {
+            archipelagoCostumeMissionScoutedItems.Clear();
+
+            if (apSession == null ||
+                !apSession.Socket.Connected)
+            {
+                return;
+            }
+
+            long[] locationIds =
+                archipelagoCostumeMissionLocations
+                    .Values
+                    .ToArray();
+
+            if (locationIds.Length == 0)
+                return;
+
+            try
+            {
+                var scoutedItems =
+                    await apSession.Locations
+                        .ScoutLocationsAsync(
+                            false,
+                            locationIds
+                        );
+
+                foreach (var pair in scoutedItems)
+                {
+                    var scoutedItem = pair.Value;
+
+                    archipelagoCostumeMissionScoutedItems[
+                        pair.Key
+                    ] = new ArchipelagoScoutedItemData
+                    {
+                        ItemName =
+                            scoutedItem.ItemDisplayName,
+
+                        PlayerName =
+                            scoutedItem.Player != null
+                                ? scoutedItem.Player.Alias
+                                : "",
+
+                        GameName =
+                            scoutedItem.ItemGame,
+
+                        Flags =
+                            Convert.ToInt32(
+                                scoutedItem.Flags
+                            )
+                    };
+                }
+
+                MelonLogger.Msg(
+                    "[AP Costume Mission] Scouted " +
+                    archipelagoCostumeMissionScoutedItems.Count +
+                    " costume mission locations."
+                );
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning(
+                    "[AP Costume Mission] Could not scout " +
+                    "costume mission items: " +
                     ex.Message
                 );
             }
@@ -3322,6 +3533,7 @@ namespace SephiriaAPRandomizer
             archipelagoSephiriteLocationByRewardInstanceId.Clear();
             archipelagoSephiriteLocationNameByRewardInstanceId.Clear();
             archipelagoSephiriteScoutedItems.Clear();
+            archipelagoCostumeMissionScoutedItems.Clear();
 
             ResetArchipelagoShrineRunState();
 
@@ -3451,6 +3663,7 @@ namespace SephiriaAPRandomizer
                 );
 
                 await ScoutArchipelagoSephiriteItems(apSession);
+                await ScoutArchipelagoCostumeMissionItems(apSession);
 
                 QueueHardModeSync();
                 QueuePermanentItemSync();
@@ -3757,6 +3970,8 @@ namespace SephiriaAPRandomizer
             if (apSession == null)
                 return;
 
+            SynchronizeArchipelagoPermanentRewards(apSession);
+
             HashSet<string> ownedCostumeIds =
                 new HashSet<string>(
                     StringComparer.Ordinal
@@ -3839,8 +4054,13 @@ namespace SephiriaAPRandomizer
             }
 
             // ---------------------------------------------
-            // Make sure an AP save isn't configured to use
-            // a costume it does not own.
+            // Selected costume
+            // ---------------------------------------------
+            // PlayerCostume is Sephiria's saved selected
+            // costume. Keep it as long as AP owns it.
+            //
+            // The starting costume is only a fallback if
+            // the saved selection is no longer valid.
             // ---------------------------------------------
 
             bool saveChanged = false;
@@ -3851,20 +4071,25 @@ namespace SephiriaAPRandomizer
                     ""
                 );
 
-            if (!string.IsNullOrEmpty(StartingCostumeId) &&
-                !ownedCostumeIds.Contains(equippedCostume))
+            if (!ownedCostumeIds.Contains(equippedCostume))
             {
-                SaveManager.Current.SetString(
-                    "PlayerCostume",
-                    StartingCostumeId
-                );
+                equippedCostume = StartingCostumeId;
 
-                saveChanged = true;
+                if (!string.IsNullOrEmpty(equippedCostume))
+                {
+                    SaveManager.Current.SetString(
+                        "PlayerCostume",
+                        equippedCostume
+                    );
 
-                MelonLogger.Msg(
-                    $"[AP Costume] Equipped starting costume: " +
-                    $"{StartingCostumeId}"
-                );
+                    saveChanged = true;
+
+                    MelonLogger.Msg(
+                        $"[AP Costume] Saved costume was not owned. " +
+                        $"Falling back to starting costume: " +
+                        $"{equippedCostume}"
+                    );
+                }
             }
 
             if (saveChanged)
@@ -3875,12 +4100,333 @@ namespace SephiriaAPRandomizer
                 );
             }
 
+            // ---------------------------------------------
+            // Runtime equipped costume
+            // ---------------------------------------------
+            // Sephiria may temporarily spawn a different
+            // costume before AP ownership is synchronized.
+            //
+            // Restore the player's SAVED selected costume,
+            // not automatically the starting costume.
+            // ---------------------------------------------
+
+            if (CombatManager.Instance != null &&
+                CombatManager.Instance.CurrentPlayer != null &&
+                !string.IsNullOrEmpty(equippedCostume) &&
+                ownedCostumeIds.Contains(equippedCostume))
+            {
+                PlayerAvatar currentPlayer =
+                    CombatManager.Instance.CurrentPlayer;
+
+                CostumeEntity selectedCostume =
+                    CostumeDatabase.FindCostumeByID(
+                        equippedCostume
+                    );
+
+                if (selectedCostume != null)
+                {
+                    string selectedSkinId =
+                        SaveManager.Current.GetString(
+                            "PlayerCostume_CurrentSkin_" +
+                            equippedCostume,
+                            ""
+                        );
+
+                    CostumeSkinEntity selectedSkin = null;
+
+                    if (!string.IsNullOrWhiteSpace(
+                            selectedSkinId))
+                    {
+                        selectedSkin =
+                            CostumeDatabase.GetCostumeSkinByID(
+                                selectedSkinId
+                            );
+                    }
+
+                    if (selectedSkin == null)
+                    {
+                        selectedSkin =
+                            CostumeDatabase.FindDefaultCostumeSkin(
+                                equippedCostume
+                            );
+
+                        selectedSkinId =
+                            selectedSkin != null
+                                ? selectedSkin.skinID
+                                : "";
+                    }
+
+                    bool wrongRuntimeCostume =
+                        !string.Equals(
+                            currentPlayer.currentCostume,
+                            equippedCostume,
+                            StringComparison.Ordinal
+                        );
+
+                    bool wrongRuntimeSkin =
+                        !string.Equals(
+                            currentPlayer.currentCostumeSkin,
+                            selectedSkinId,
+                            StringComparison.Ordinal
+                        );
+
+                    if (wrongRuntimeCostume ||
+                        wrongRuntimeSkin)
+                    {
+                        currentPlayer.EquipCostume(
+                            equippedCostume,
+                            selectedSkinId
+                        );
+
+                        PlayerSpawner playerSpawner =
+                            currentPlayer.GetComponent<PlayerSpawner>();
+
+                        if (playerSpawner != null &&
+                            playerSpawner.LocalDataStorage != null)
+                        {
+                            playerSpawner.LocalDataStorage
+                                .NetworkdefaultCostume =
+                                    equippedCostume;
+
+                            playerSpawner.LocalDataStorage
+                                .NetworkdefaultCostumeSkin =
+                                    selectedSkinId;
+
+                            SaveManager.CurrentRun?.SetString(
+                                $"Player{playerSpawner.currentPlayerIdxForSave}Costume",
+                                equippedCostume
+                            );
+
+                            SaveManager.CurrentRun?.SetString(
+                                $"Player{playerSpawner.currentPlayerIdxForSave}Skin",
+                                selectedSkinId
+                            );
+                        }
+
+                        MelonLogger.Msg(
+                            $"[AP Costume] Runtime restored saved costume: " +
+                            $"{equippedCostume}"
+                        );
+                    }
+                }
+            }
+
             MelonLogger.Msg(
                 $"[AP Costume] Ownership synchronized. " +
                 $"Owned={ownedCostumeIds.Count}, " +
                 $"Starting={StartingCostumeId}, " +
                 $"RuntimeReady={CombatManager.Instance != null}"
             );
+        }
+
+        private static void SynchronizeArchipelagoPermanentRewards(
+            ArchipelagoSession apSession)
+        {
+            if (apSession == null)
+                return;
+
+            if (CombatManager.Instance == null ||
+                CombatManager.Instance.CurrentPlayer == null)
+            {
+                return;
+            }
+
+            PlayerSpawner playerSpawner =
+                CombatManager.Instance.CurrentPlayer
+                    .GetComponent<PlayerSpawner>();
+
+            if (playerSpawner == null)
+                return;
+
+            foreach (KeyValuePair<string, int> reward
+                in archipelagoPermanentRewardItems)
+            {
+                string apItemName =
+                    reward.Key;
+
+                int treeShopItemId =
+                    reward.Value;
+
+                bool ownsReward =
+                    apSession.Items.AllItemsReceived.Any(
+                        receivedItem =>
+                            receivedItem != null &&
+                            string.Equals(
+                                receivedItem.ItemName,
+                                apItemName,
+                                StringComparison.Ordinal
+                            )
+                    );
+
+                TreeShopItemEntity treeShopItem =
+                    TreeShopItemDatabase.FindById(
+                        treeShopItemId
+                    );
+
+                if (treeShopItem == null ||
+                    treeShopItem.items == null)
+                {
+                    MelonLogger.Warning(
+                        $"[AP Permanent Reward] Could not find " +
+                        $"TreeShop reward {treeShopItemId} " +
+                        $"for {apItemName}."
+                    );
+
+                    continue;
+                }
+
+                List<int> itemsToUnlock =
+                    new List<int>();
+
+                bool changed = false;
+
+                foreach (ItemEntity itemEntity
+                    in treeShopItem.items)
+                {
+                    if (itemEntity == null)
+                        continue;
+
+                    bool currentlyUnlocked;
+
+                    if (itemEntity.type == EItemType.Charm)
+                    {
+                        currentlyUnlocked =
+                            playerSpawner.unlockedCharms.Contains(
+                                itemEntity.id
+                            );
+                    }
+                    else if (
+                        itemEntity.type ==
+                            EItemType.StoneTablet)
+                    {
+                        currentlyUnlocked =
+                            playerSpawner
+                                .unlockedStoneTablets
+                                .Contains(
+                                    itemEntity.id
+                                );
+                    }
+                    else
+                    {
+                        MelonLogger.Warning(
+                            $"[AP Permanent Reward] Unsupported " +
+                            $"item type {itemEntity.type} for " +
+                            $"{apItemName}, ItemID={itemEntity.id}."
+                        );
+
+                        continue;
+                    }
+
+                    if (ownsReward &&
+                        !currentlyUnlocked)
+                    {
+                        if (NetworkServer.active)
+                        {
+                            if (itemEntity.type ==
+                                EItemType.Charm)
+                            {
+                                playerSpawner.unlockedCharms.Add(
+                                    itemEntity.id
+                                );
+                            }
+                            else
+                            {
+                                playerSpawner
+                                    .unlockedStoneTablets
+                                    .Add(
+                                        itemEntity.id
+                                    );
+                            }
+                        }
+                        else
+                        {
+                            itemsToUnlock.Add(
+                                itemEntity.id
+                            );
+                        }
+
+                        changed = true;
+                    }
+                    else if (!ownsReward &&
+                             currentlyUnlocked &&
+                             NetworkServer.active)
+                    {
+                        if (itemEntity.type ==
+                            EItemType.Charm)
+                        {
+                            playerSpawner.unlockedCharms.Remove(
+                                itemEntity.id
+                            );
+                        }
+                        else
+                        {
+                            playerSpawner
+                                .unlockedStoneTablets
+                                .Remove(
+                                    itemEntity.id
+                                );
+                        }
+
+                        changed = true;
+                    }
+                }
+
+                if (!NetworkServer.active &&
+                    itemsToUnlock.Count > 0)
+                {
+                    playerSpawner.CmdUnlockNewItems(
+                        itemsToUnlock.ToArray()
+                    );
+                }
+
+                if (changed)
+                {
+                    MelonLogger.Msg(
+                        $"[AP Permanent Reward] " +
+                        $"{apItemName} = {ownsReward}"
+                    );
+                }
+            }
+        }
+
+        public static string GetArchipelagoCostumeMissionName(
+            string costumeId)
+        {
+            string name;
+
+            if (archipelagoCostumeMissionNames.TryGetValue(
+                    costumeId,
+                    out name))
+            {
+                return name;
+            }
+
+            return costumeId;
+        }
+
+        public static string[] GetArchipelagoCostumeMissionOrder()
+        {
+            return new string[]
+            {
+                "FireCat",
+                "Fox",
+                "Frog",
+                "Mole",
+                "Otter",
+                "WhiteWolf",
+                "WizardRabbit",
+                "Bird",
+                "Crocodile",
+                "Deer",
+                "Luck",
+                "Squirrel",
+                "Turtle",
+                "ForestCat",
+                "Ghost",
+                "Seren",
+                "Skeleton",
+                "Bat"
+            };
         }
 
         public static void PrepareArchipelagoCostumeMissionTrackers()
@@ -3965,6 +4511,66 @@ namespace SephiriaAPRandomizer
             );
 
             return true;
+        }
+
+        public static bool IsArchipelagoCostumeOwned(
+            string costumeId)
+        {
+            if (!IsArchipelagoSave)
+                return false;
+
+            if (string.IsNullOrEmpty(costumeId))
+                return false;
+
+            // Random starting costume.
+            if (string.Equals(
+                    StartingCostumeId,
+                    costumeId,
+                    StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            ArchipelagoSession apSession =
+                session as ArchipelagoSession;
+
+            if (apSession == null)
+                return false;
+
+            // Costumes received from Archipelago.
+            foreach (var receivedItem
+                in apSession.Items.AllItemsReceived)
+            {
+                if (receivedItem == null)
+                    continue;
+
+                string receivedCostumeId;
+
+                if (!archipelagoCostumeItems.TryGetValue(
+                        receivedItem.ItemName,
+                        out receivedCostumeId))
+                {
+                    continue;
+                }
+
+                if (string.Equals(
+                        receivedCostumeId,
+                        costumeId,
+                        StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        public static bool IsArchipelagoPermanentRewardTreeShopItem(
+            int treeShopItemId)
+        {
+            return archipelagoPermanentRewardTreeShopIds.Contains(
+                treeShopItemId
+            );
         }
 
         private static void RefreshArchipelagoDeclineRuntimeStatus()
@@ -4770,6 +5376,757 @@ namespace SephiriaAPRandomizer
             MelonLogger.Msg("Archipelago goal achieved!");
 
             apSession.SetGoalAchieved();
+        }
+    }
+
+    public class ArchipelagoCostumeTabController : MonoBehaviour
+    {
+        private UI_CostumePanel panel;
+
+        private RectTransform tabRoot;
+
+        private UI_HorayButton costumesButton;
+        private UI_HorayButton missionsButton;
+
+        private TextMeshProUGUI costumesText;
+        private TextMeshProUGUI missionsText;
+
+        private Image costumesUnderline;
+        private Image missionsUnderline;
+
+        private readonly List<UI_CostumeListElement>
+            missionRows =
+                new List<UI_CostumeListElement>();
+
+        private readonly Dictionary<
+            UI_CostumeListElement,
+            string>
+            missionIds =
+                new Dictionary<
+                    UI_CostumeListElement,
+                    string>();
+
+        private bool showingMissions;
+
+        private static readonly UnityEngine.Color ActiveTabColor =
+            new Color32(245, 228, 142, 255);
+
+        private static readonly UnityEngine.Color InactiveTabColor =
+            UnityEngine.Color.white;
+
+        // ---------------------------------------------------------
+        // Initialization
+        // ---------------------------------------------------------
+
+        public void Initialize(
+            UI_CostumePanel costumePanel)
+        {
+            panel = costumePanel;
+
+            MoveCostumeHeader();
+
+            if (tabRoot == null)
+            {
+                CreateTabBar();
+            }
+
+            EnsureMissionRows();
+            RefreshMissionRows();
+
+            // Always open on Costumes.
+            ShowCostumes();
+        }
+
+        // ---------------------------------------------------------
+        // Update
+        // ---------------------------------------------------------
+
+        private void Update()
+        {
+            if (!SephiriaMod.IsArchipelagoSave)
+                return;
+
+            if (panel == null ||
+                !panel.gameObject.activeInHierarchy)
+            {
+                return;
+            }
+
+            if (!UIInputModule.current)
+                return;
+
+            bool previousTab = false;
+            bool nextTab = false;
+
+            if (ControlsChangeHandler.Current.IsUsingKeyboardAndMouse)
+            {
+                previousTab =
+                    UIInputModule.current
+                        .prevTabAction
+                        .action
+                        .WasPressedThisFrame();
+
+                nextTab =
+                    UIInputModule.current
+                        .nextTabAction
+                        .action
+                        .WasPressedThisFrame();
+            }
+            else
+            {
+                Gamepad gamepad =
+                    Gamepad.current;
+
+                previousTab =
+                    gamepad?.leftShoulder.wasPressedThisFrame
+                    ?? false;
+
+                nextTab =
+                    gamepad?.rightShoulder.wasPressedThisFrame
+                    ?? false;
+            }
+
+            if (previousTab)
+            {
+                ShowCostumes();
+            }
+
+            if (nextTab)
+            {
+                ShowMissions();
+            }
+        }
+
+        // ---------------------------------------------------------
+        // Header
+        // ---------------------------------------------------------
+
+        private void MoveCostumeHeader()
+        {
+            TextMeshProUGUI[] texts =
+                panel.GetComponentsInChildren<TextMeshProUGUI>(
+                    true
+                );
+
+            foreach (TextMeshProUGUI text in texts)
+            {
+                if (text == null ||
+                    text.text != "COSTUME SELECTION")
+                {
+                    continue;
+                }
+
+                RectTransform titleLabel =
+                    text.transform.parent as RectTransform;
+
+                if (titleLabel == null)
+                    return;
+
+                titleLabel.anchoredPosition =
+                    new Vector2(
+                        titleLabel.anchoredPosition.x,
+                        -16f
+                    );
+
+                return;
+            }
+        }
+
+        // ---------------------------------------------------------
+        // Tab bar
+        // ---------------------------------------------------------
+
+        private void CreateTabBar()
+        {
+            GameObject rootObject =
+                new GameObject(
+                    "AP Costume Tabs",
+                    typeof(RectTransform)
+                );
+
+            tabRoot =
+                rootObject.GetComponent<RectTransform>();
+
+            tabRoot.SetParent(
+                panel.transform,
+                false
+            );
+
+            tabRoot.anchorMin =
+                new Vector2(0.5f, 1f);
+
+            tabRoot.anchorMax =
+                new Vector2(0.5f, 1f);
+
+            tabRoot.pivot =
+                new Vector2(0.5f, 0.5f);
+
+            // The large panels start at about Y=300
+            // in the 360-high CostumePanel.
+            //
+            // This places the tabs in the gap directly
+            // beneath the title.
+            tabRoot.anchoredPosition =
+                new Vector2(0f, -50f);
+
+            tabRoot.sizeDelta =
+                new Vector2(190f, 18f);
+
+            costumesButton =
+                CreateTabButton(
+                    "Costumes Tab",
+                    "COSTUMES",
+                    -48f,
+                    out costumesText,
+                    out costumesUnderline
+                );
+
+            missionsButton =
+                CreateTabButton(
+                    "Missions Tab",
+                    "MISSIONS",
+                    48f,
+                    out missionsText,
+                    out missionsUnderline
+                );
+
+            costumesButton.onClick.AddListener(
+                ShowCostumes
+            );
+
+            missionsButton.onClick.AddListener(
+                ShowMissions
+            );
+        }
+
+        private UI_HorayButton CreateTabButton(
+            string objectName,
+            string label,
+            float x,
+            out TextMeshProUGUI text,
+            out Image underline)
+        {
+            GameObject buttonObject =
+                new GameObject(
+                    objectName,
+                    typeof(RectTransform),
+                    typeof(Image)
+                );
+
+            RectTransform rect =
+                buttonObject.GetComponent<RectTransform>();
+
+            rect.SetParent(
+                tabRoot,
+                false
+            );
+
+            rect.anchorMin =
+                new Vector2(0.5f, 0.5f);
+
+            rect.anchorMax =
+                new Vector2(0.5f, 0.5f);
+
+            rect.pivot =
+                new Vector2(0.5f, 0.5f);
+
+            rect.anchoredPosition =
+                new Vector2(x, 0f);
+
+            rect.sizeDelta =
+                new Vector2(88f, 18f);
+
+            Image image =
+                buttonObject.GetComponent<Image>();
+
+            // Invisible clickable area.
+            image.color =
+                new UnityEngine.Color(0f, 0f, 0f, 0f);
+
+            image.raycastTarget = true;
+
+            UI_HorayButton button =
+                buttonObject.AddComponent<UI_HorayButton>();
+
+            button.targetGraphic = image;
+            button.transition =
+                Selectable.Transition.None;
+
+            // Clone an existing TMP object so we use
+            // Sephiria's actual font/material.
+            text =
+                UnityEngine.Object.Instantiate(
+                    panel.tooltipNameText,
+                    buttonObject.transform
+                );
+
+            text.name = "Text";
+            text.text = label;
+            text.alignment =
+                TextAlignmentOptions.Center;
+
+            text.enableAutoSizing = false;
+            text.fontSize = 7f;
+            text.color = InactiveTabColor;
+            text.raycastTarget = false;
+
+            RectTransform textRect =
+                text.rectTransform;
+
+            textRect.anchorMin =
+                Vector2.zero;
+
+            textRect.anchorMax =
+                Vector2.one;
+
+            textRect.offsetMin =
+                Vector2.zero;
+
+            textRect.offsetMax =
+                Vector2.zero;
+
+            button.text = text;
+
+            GameObject underlineObject =
+                new GameObject(
+                    "Underline",
+                    typeof(RectTransform),
+                    typeof(Image)
+                );
+
+            RectTransform underlineRect =
+                underlineObject
+                    .GetComponent<RectTransform>();
+
+            underlineRect.SetParent(
+                buttonObject.transform,
+                false
+            );
+
+            underlineRect.anchorMin =
+                new Vector2(0.5f, 0f);
+
+            underlineRect.anchorMax =
+                new Vector2(0.5f, 0f);
+
+            underlineRect.pivot =
+                new Vector2(0.5f, 0.5f);
+
+            underlineRect.anchoredPosition =
+                new Vector2(0f, 1f);
+
+            underlineRect.sizeDelta =
+                new Vector2(68f, 1f);
+
+            underline =
+                underlineObject.GetComponent<Image>();
+
+            underline.color = ActiveTabColor;
+            underline.raycastTarget = false;
+
+            return button;
+        }
+
+        // ---------------------------------------------------------
+        // Mission rows
+        // ---------------------------------------------------------
+
+        private void EnsureMissionRows()
+        {
+            missionRows.RemoveAll(
+                row => row == null
+            );
+
+            if (missionRows.Count > 0)
+                return;
+
+            missionIds.Clear();
+
+            foreach (string costumeId
+                in SephiriaMod
+                    .GetArchipelagoCostumeMissionOrder())
+            {
+                string description;
+                bool completed;
+                string sentItem;
+
+                if (!SephiriaMod
+                        .TryGetArchipelagoCostumeMissionInfo(
+                            costumeId,
+                            out description,
+                            out completed,
+                            out sentItem))
+                {
+                    continue;
+                }
+
+                UI_CostumeListElement row =
+                    UnityEngine.Object.Instantiate(
+                        panel.costumeListElementPrefab,
+                        panel.contentsZone
+                    );
+
+                row.name =
+                    "AP Mission - " + costumeId;
+
+                string costumeName = SephiriaMod.GetArchipelagoCostumeMissionName(costumeId);
+
+                row.nameText.text = description + "\n(" + costumeName + " Mission)";
+                row.nameText.enableAutoSizing = true;
+                row.nameText.fontSizeMin = 4.5f;
+                row.nameText.fontSizeMax = 7.5f;
+
+                UnityEngine.Sprite apLogo =
+                    SephiriaMod.GetArchipelagoSephiriteSprite(
+                        panel.tooltipIconImage.sprite
+                    );
+
+                if (apLogo != null)
+                {
+                    row.iconImage.sprite = apLogo;
+                    row.iconImage.preserveAspect = true;
+
+                    row.iconImage.rectTransform.sizeDelta =
+                        new Vector2(20f, 20f);
+                }
+
+                // Hidden until the mission is completed.
+                row.iconImage.enabled = false;
+
+                row.backgroundImage.enabled = false;
+
+                row.hardModeBackgroundImage.enabled =
+                    false;
+
+                row.SetEquipCursor(false);
+
+                string capturedId = costumeId;
+
+                row.OnSelected += delegate
+                {
+                    ShowMissionInfo(
+                        capturedId
+                    );
+                };
+
+                row.OnClicked += delegate
+                {
+                    ShowMissionInfo(
+                        capturedId
+                    );
+                };
+
+                missionRows.Add(row);
+
+                missionIds[row] =
+                    costumeId;
+
+                // Costumes is the default tab.
+                row.gameObject.SetActive(false);
+            }
+        }
+
+        private void RefreshMissionRows()
+        {
+            foreach (UI_CostumeListElement row
+                in missionRows)
+            {
+                if (row == null)
+                    continue;
+
+                string costumeId;
+
+                if (!missionIds.TryGetValue(
+                        row,
+                        out costumeId))
+                {
+                    continue;
+                }
+
+                string description;
+                bool completed;
+                string sentItem;
+
+                if (!SephiriaMod
+                        .TryGetArchipelagoCostumeMissionInfo(
+                            costumeId,
+                            out description,
+                            out completed,
+                            out sentItem))
+                {
+                    continue;
+                }
+
+                string costumeName = SephiriaMod.GetArchipelagoCostumeMissionName(costumeId);
+
+                row.nameText.text = description + "\n(" + costumeName + " Mission)";
+
+                row.nameText.color =
+                    completed
+                        ? ActiveTabColor
+                        : UnityEngine.Color.white;
+
+                row.iconImage.enabled =
+                    completed &&
+                    row.iconImage.sprite != null;
+            }
+        }
+
+        // ---------------------------------------------------------
+        // Switching tabs
+        // ---------------------------------------------------------
+
+        public void ShowCostumes()
+        {
+            if (panel == null)
+                return;
+
+            showingMissions = false;
+
+            SetRowVisibility(
+                missions: false
+            );
+
+            UpdateTabVisuals();
+
+            panel.skinContentsZone
+                .gameObject
+                .SetActive(true);
+
+            panel.tooltipIconImage
+                .gameObject
+                .SetActive(true);
+
+            ResetListScroll();
+
+            // Restore the normal tooltip using the
+            // player's currently equipped costume.
+            if (CombatManager.Instance != null &&
+                CombatManager.Instance.CurrentPlayer != null)
+            {
+                PlayerAvatar player =
+                    CombatManager.Instance.CurrentPlayer;
+
+                CostumeEntity costume =
+                    CostumeDatabase.FindCostumeByID(
+                        player.currentCostume
+                    );
+
+                if (costume != null)
+                {
+                    AccessTools
+                        .Method(
+                            typeof(UI_CostumePanel),
+                            "UpdateData"
+                        )
+                        .Invoke(
+                            panel,
+                            new object[]
+                            {
+                            costume
+                            }
+                        );
+                }
+            }
+
+            if (!ControlsChangeHandler.Current
+                .IsUsingKeyboardAndMouse)
+            {
+                foreach (Transform child
+                    in panel.contentsZone)
+                {
+                    UI_CostumeListElement row =
+                        child.GetComponent<
+                            UI_CostumeListElement>();
+
+                    if (row == null ||
+                        missionRows.Contains(row) ||
+                        !row.gameObject.activeInHierarchy ||
+                        row.button == null)
+                    {
+                        continue;
+                    }
+
+                    row.button.Select();
+                    break;
+                }
+            }
+        }
+
+        public void ShowMissions()
+        {
+            if (panel == null)
+                return;
+
+            showingMissions = true;
+
+            RefreshMissionRows();
+
+            SetRowVisibility(
+                missions: true
+            );
+
+            UpdateTabVisuals();
+
+            ResetListScroll();
+
+            if (missionRows.Count > 0)
+            {
+                UI_CostumeListElement first =
+                    missionRows[0];
+
+                string costumeId;
+
+                if (first != null &&
+                    missionIds.TryGetValue(
+                        first,
+                        out costumeId))
+                {
+                    ShowMissionInfo(
+                        costumeId
+                    );
+
+                    if (first.button != null)
+                    {
+                        first.button.Select();
+                    }
+                }
+            }
+        }
+
+        private void SetRowVisibility(
+            bool missions)
+        {
+            foreach (Transform child
+                in panel.contentsZone)
+            {
+                UI_CostumeListElement row =
+                    child.GetComponent<
+                        UI_CostumeListElement>();
+
+                if (row == null)
+                    continue;
+
+                bool isMission =
+                    missionRows.Contains(row);
+
+                row.gameObject.SetActive(
+                    missions
+                        ? isMission
+                        : !isMission
+                );
+            }
+        }
+
+        private void UpdateTabVisuals()
+        {
+            costumesText.color =
+                showingMissions
+                    ? InactiveTabColor
+                    : ActiveTabColor;
+
+            missionsText.color =
+                showingMissions
+                    ? ActiveTabColor
+                    : InactiveTabColor;
+
+            costumesUnderline.gameObject.SetActive(
+                !showingMissions
+            );
+
+            missionsUnderline.gameObject.SetActive(
+                showingMissions
+            );
+        }
+
+        private void ResetListScroll()
+        {
+            ScrollRect scrollRect =
+                panel.contentsZone
+                    .GetComponentInParent<ScrollRect>();
+
+            if (scrollRect != null)
+            {
+                scrollRect.verticalNormalizedPosition =
+                    1f;
+            }
+        }
+
+        // ---------------------------------------------------------
+        // Mission details
+        // ---------------------------------------------------------
+
+        private void ShowMissionInfo(
+            string costumeId)
+        {
+            string description;
+            bool completed;
+            string sentItem;
+
+            if (!SephiriaMod
+                    .TryGetArchipelagoCostumeMissionInfo(
+                        costumeId,
+                        out description,
+                        out completed,
+                        out sentItem))
+            {
+                return;
+            }
+
+            panel.tooltipBackgroundImage.sprite =
+                panel.normalSprite;
+
+            string costumeName = SephiriaMod.GetArchipelagoCostumeMissionName(costumeId);
+
+            panel.tooltipNameText.text = "Costume Mission";
+
+            panel.tooltipNameText.color = UnityEngine.Color.white;
+
+            panel.tooltipFlavortextText.text = description + "\n\n(" + costumeName + " Mission)";
+
+            panel.tooltipFlavortextText.color = UnityEngine.Color.white;
+
+            if (completed)
+            {
+                panel.tooltipEffectText.text =
+                    !string.IsNullOrEmpty(sentItem)
+                        ? "Completed\n\nSent: " +
+                          sentItem
+                        : "Completed";
+            }
+            else
+            {
+                // IMPORTANT:
+                // Do not expose the scouted reward.
+                panel.tooltipEffectText.text =
+                    "Incomplete";
+            }
+
+            panel.tooltipEffectText.color =
+                UnityEngine.Color.white;
+
+            panel.tooltipIconImage
+                .gameObject
+                .SetActive(false);
+
+            panel.tooltipEquippedCursor
+                .gameObject
+                .SetActive(false);
+
+            panel.tooltipLocked.SetActive(false);
+
+            panel.tooltipUnlockConditionText.text =
+                "";
+
+            panel.hardModeValue.SetActive(false);
+
+            panel.startingItem
+                .gameObject
+                .SetActive(false);
+
+            panel.skinContentsZone
+                .gameObject
+                .SetActive(false);
         }
     }
 }
@@ -5919,6 +7276,16 @@ public static class NewGamePatch
             false
         );
 
+        SaveManager.Current.SetBool(
+            "StoneTableTutorial",
+            false
+        );
+
+        SaveManager.Current.SetBool(
+            "CostumeTutorial",
+            false
+        );
+
         if (SephiriaMod.GoalChapter >= 4)
         {
             SaveManager.Current.SetBool(
@@ -6075,17 +7442,32 @@ public static class DesertEndEventPatch
     }
 }
 
-[HarmonyPatch(typeof(PlayerLocalDataStorage), nameof(PlayerLocalDataStorage.UpdateMainQuestProgress))]
+[HarmonyPatch(
+    typeof(PlayerLocalDataStorage),
+    nameof(PlayerLocalDataStorage.UpdateMainQuestProgress)
+)]
 public static class Chapter2TitlePatch
 {
     private static bool shown;
 
-    public static void Postfix(PlayerLocalDataStorage __instance)
+    public static void Postfix(
+        PlayerLocalDataStorage __instance)
     {
-        if(!SephiriaMod.IsArchipelagoSave)
+        if (!SephiriaMod.IsArchipelagoSave)
             return;
 
         if (SephiriaMod.GoalChapter != 2 || shown)
+            return;
+
+        if (SaveManager.CurrentRun == null)
+            return;
+
+        // Only show the forced AP chapter title when
+        // starting a fresh run. A resumed run already
+        // has its CurrentGame assigned.
+        if (SaveManager.CurrentRun.GetInt(
+                "CurrentGame",
+                -1) != -1)
         {
             return;
         }
@@ -6103,12 +7485,23 @@ public static class Chapter3TitlePatch
 {
     private static bool shown;
 
-    public static void Postfix(PlayerLocalDataStorage __instance)
+    public static void Postfix(
+        PlayerLocalDataStorage __instance)
     {
         if (!SephiriaMod.IsArchipelagoSave)
             return;
 
         if (SephiriaMod.GoalChapter != 3 || shown)
+            return;
+
+        if (SaveManager.CurrentRun == null)
+            return;
+
+        // Do not replay the chapter title when
+        // loading an adventure already in progress.
+        if (SaveManager.CurrentRun.GetInt(
+                "CurrentGame",
+                -1) != -1)
         {
             return;
         }
@@ -6118,17 +7511,31 @@ public static class Chapter3TitlePatch
     }
 }
 
-[HarmonyPatch(typeof(PlayerLocalDataStorage), nameof(PlayerLocalDataStorage.UpdateMainQuestProgress))]
+[HarmonyPatch(
+    typeof(PlayerLocalDataStorage),
+    nameof(PlayerLocalDataStorage.UpdateMainQuestProgress)
+)]
 public static class Chapter4TitlePatch
 {
     private static bool shown;
 
-    public static void Postfix(PlayerLocalDataStorage __instance)
+    public static void Postfix(
+        PlayerLocalDataStorage __instance)
     {
         if (!SephiriaMod.IsArchipelagoSave)
             return;
 
         if (SephiriaMod.GoalChapter != 4 || shown)
+            return;
+
+        if (SaveManager.CurrentRun == null)
+            return;
+
+        // Do not replay the chapter title when
+        // loading an adventure already in progress.
+        if (SaveManager.CurrentRun.GetInt(
+                "CurrentGame",
+                -1) != -1)
         {
             return;
         }
@@ -6556,13 +7963,30 @@ public static class ChangeChapterBlockPatch
         if (!SephiriaMod.IsArchipelagoSave)
             return true;
 
-        if ((SephiriaMod.GoalChapter == 4 ||
-             SephiriaMod.GoalChapter == 5 ||
-             SephiriaMod.GoalChapter == 6) &&
-            SephiriaMod.CompletedChapterClears <
-            SephiriaMod.RequiredChapterClears &&
-            chapter != SephiriaMod.GoalChapter)
+        if (SephiriaMod.GoalChapter < 1 ||
+            SephiriaMod.GoalChapter > 6)
         {
+            return true;
+        }
+
+        // Once the AP goal is complete, stop interfering
+        // and allow Sephiria's normal ending/progression.
+        if (SephiriaMod.CompletedChapterClears >=
+            SephiriaMod.RequiredChapterClears)
+        {
+            return true;
+        }
+
+        // While the AP goal is still active, the only
+        // chapter title that is valid is the selected
+        // AP goal chapter.
+        if (chapter != SephiriaMod.GoalChapter)
+        {
+            MelonLogger.Msg(
+                $"[AP Chapter Title] Blocked Chapter {chapter} " +
+                $"while AP goal is Chapter {SephiriaMod.GoalChapter}."
+            );
+
             return false;
         }
 
@@ -8694,30 +10118,6 @@ public static class ArchipelagoSaveProfileNavigationPatch
 }
 
 [HarmonyPatch(
-    typeof(CostumeUnlockEntity),
-    nameof(CostumeUnlockEntity.Unlock)
-)]
-public static class ArchipelagoCostumeVanillaUnlockPatch
-{
-    public static bool Prefix(
-        CostumeUnlockEntity __instance
-    )
-    {
-        // Normal saves retain completely vanilla
-        // costume behavior.
-        if (!SephiriaMod.IsArchipelagoSave)
-            return true;
-
-        // On AP saves, costume missions must not
-        // directly award their vanilla costumes.
-        //
-        // The mission will become an AP location check
-        // in the next step.
-        return false;
-    }
-}
-
-[HarmonyPatch(
     typeof(CombatManager),
     nameof(CombatManager.SetCurrentPlayer)
 )]
@@ -8764,20 +10164,593 @@ public static class ArchipelagoCostumeMissionPatch
         string costumeId =
             __instance.unlockCostume.id;
 
-        // Fairy of Fortune is special in AP.
+        // Fairy of Fortune is handled separately.
         //
-        // Vanilla unlocks it from Chapter 4 completion, but our
-        // AP mission is "clear the game on any chapter".
-        // Therefore the vanilla Luck trigger must NEVER send
-        // the AP location.
+        // Vanilla uses the Chapter 4 completion switch,
+        // but AP requires clearing the game on any chapter.
         if (costumeId == "Luck")
-            return false;
+        {
+            __instance.ClearTarget();
 
-        SephiriaMod.TryCompleteArchipelagoCostumeMission(
-            costumeId
+            UnityEngine.Object.Destroy(
+                __instance.gameObject
+            );
+
+            return false;
+        }
+
+        bool completed =
+            SephiriaMod.TryCompleteArchipelagoCostumeMission(
+                costumeId
+            );
+
+        // Only remove the tracker once the AP server
+        // accepted the check, or already has it checked.
+        //
+        // If disconnected or sending fails, leave the
+        // tracker alive so the mission can be retried.
+        if (completed)
+        {
+            __instance.ClearTarget();
+
+            UnityEngine.Object.Destroy(
+                __instance.gameObject
+            );
+        }
+
+        // Never award the vanilla costume on an AP save.
+        return false;
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_CostumePanel),
+    nameof(UI_CostumePanel.OnOpened)
+)]
+public static class ArchipelagoCostumePanelOpenPatch
+{
+    public static void Prefix()
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        SephiriaMod.IsBuildingArchipelagoCostumePanel =
+            true;
+    }
+
+    public static void Postfix(
+        UI_CostumePanel __instance)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        ArchipelagoCostumeTabController controller =
+            __instance.GetComponent<
+                ArchipelagoCostumeTabController>();
+
+        if (controller == null)
+        {
+            controller =
+                __instance.gameObject.AddComponent<
+                    ArchipelagoCostumeTabController>();
+        }
+
+        controller.Initialize(
+            __instance
+        );
+    }
+
+    public static Exception Finalizer(
+        Exception __exception)
+    {
+        SephiriaMod.IsBuildingArchipelagoCostumePanel =
+            false;
+
+        return __exception;
+    }
+}
+
+[HarmonyPatch(
+    typeof(CostumeDatabase),
+    nameof(CostumeDatabase.IsUnlocked)
+)]
+public static class ArchipelagoCostumePanelHiddenPatch
+{
+    public static void Postfix(
+        string id,
+        ref bool __result)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        if (!SephiriaMod
+                .IsBuildingArchipelagoCostumePanel)
+        {
+            return;
+        }
+
+        // These are the two Hidden costumes.
+        // Pretend they're unlocked ONLY while the
+        // costume panel is building its list so they
+        // aren't omitted.
+        if (id == "Bat" ||
+            id == "Skeleton")
+        {
+            __result = true;
+        }
+    }
+}
+[HarmonyPatch(
+    typeof(CostumeDatabase),
+    nameof(CostumeDatabase.IsDungreedDlcOwned)
+)]
+public static class ArchipelagoCostumePanelDungreedPatch
+{
+    public static void Postfix(
+        ref bool __result)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        if (!SephiriaMod
+                .IsBuildingArchipelagoCostumePanel)
+        {
+            return;
+        }
+
+        // AP ownership of Adventurer Bunny is completely
+        // independent of whether Dungreed is owned.
+        __result = true;
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_CostumeListElement),
+    nameof(UI_CostumeListElement.Initialize)
+)]
+public static class ArchipelagoCostumeListElementPatch
+{
+    public static void Postfix(
+        UI_CostumeListElement __instance,
+        CostumeEntity costume)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        if (costume == null)
+            return;
+
+        if (SephiriaMod.IsArchipelagoCostumeOwned(
+                costume.id))
+        {
+            return;
+        }
+
+        // AP-unowned costumes reveal nothing.
+        __instance.nameText.text = "Locked";
+        __instance.nameText.color = UnityEngine.Color.gray;
+
+        __instance.iconImage.sprite = null;
+        __instance.iconImage.rectTransform.sizeDelta =
+            Vector2.zero;
+
+        __instance.backgroundImage.enabled = false;
+        __instance.hardModeBackgroundImage.enabled = false;
+
+        __instance.SetEquipCursor(false);
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_CostumePanel),
+    "UpdateData"
+)]
+public static class ArchipelagoCostumeTooltipPatch
+{
+    public static void Postfix(
+        UI_CostumePanel __instance,
+        CostumeEntity costume,
+        List<UI_CostumeSkinIcon> ___skinIcons,
+        List<UI_ItemIcon> ___startingItemIcons)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        if (costume == null)
+            return;
+
+        if (SephiriaMod.IsArchipelagoCostumeOwned(
+                costume.id))
+        {
+            return;
+        }
+
+        // Remove any skin icons vanilla may have created.
+        foreach (UI_CostumeSkinIcon skinIcon
+            in ___skinIcons)
+        {
+            if (skinIcon != null)
+            {
+                UnityEngine.Object.Destroy(
+                    skinIcon.gameObject
+                );
+            }
+        }
+
+        ___skinIcons.Clear();
+
+        // Remove starting-item icons vanilla may have
+        // created for Default/Dungreed costumes.
+        foreach (UI_ItemIcon itemIcon
+            in ___startingItemIcons)
+        {
+            if (itemIcon != null)
+            {
+                UnityEngine.Object.Destroy(
+                    itemIcon.gameObject
+                );
+            }
+        }
+
+        ___startingItemIcons.Clear();
+
+        __instance.startingItem.gameObject.SetActive(
+            false
         );
 
-        // Never grant the vanilla costume.
+        // AP locked presentation.
+        __instance.tooltipNameText.text = "Locked";
+        __instance.tooltipFlavortextText.text = "";
+        __instance.tooltipEffectText.text = "";
+
+        __instance.tooltipIconImage.sprite = null;
+        __instance.tooltipIconImage.gameObject.SetActive(
+            false
+        );
+
+        __instance.tooltipLocked.SetActive(true);
+
+        // Critically: no vanilla costume mission text.
+        __instance.tooltipUnlockConditionText.text =
+            "Locked";
+
+        __instance.hardModeValue.SetActive(false);
+
+        __instance.tooltipEquippedCursor.gameObject
+            .SetActive(false);
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_CostumePanel),
+    "HandleClick"
+)]
+public static class ArchipelagoCostumeClickPatch
+{
+    public static bool Prefix(
+        UI_CostumeListElement e)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        if (e == null ||
+            e.Costume == null)
+        {
+            return false;
+        }
+
+        return SephiriaMod.IsArchipelagoCostumeOwned(
+            e.Costume.id
+        );
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_CostumePanel),
+    nameof(UI_CostumePanel.EquipSkin)
+)]
+public static class ArchipelagoCostumeSkinEquipPatch
+{
+    public static bool Prefix(
+        UI_CostumeSkinIcon icon)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        if (icon == null ||
+            icon.costume == null)
+        {
+            return false;
+        }
+
+        return SephiriaMod.IsArchipelagoCostumeOwned(
+            icon.costume.id
+        );
+    }
+}
+
+[HarmonyPatch(
+    typeof(TreeShopItemStorage),
+    nameof(TreeShopItemStorage.CanBuyItem)
+)]
+public static class ArchipelagoPermanentRewardPurchasePatch
+{
+    public static bool Prefix(
+        TreeShopItemEntity shopItem,
+        ref bool __result)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        if (shopItem == null ||
+            !SephiriaMod
+                .IsArchipelagoPermanentRewardTreeShopItem(
+                    shopItem.id
+                ))
+        {
+            return true;
+        }
+
+        __result = false;
+
+        MelonLogger.Msg(
+            $"[AP Permanent Reward] Blocked vanilla " +
+            $"TreeShop reward {shopItem.id}."
+        );
+
         return false;
+    }
+}
+
+[HarmonyPatch(
+    typeof(TreeShopItemStorage),
+    nameof(TreeShopItemStorage.Load)
+)]
+public static class ArchipelagoPermanentRewardLoadPatch
+{
+    public static void Prefix(
+        ref DestinyInscriptionPurchaseData[] purchase)
+    {
+        if (!SephiriaMod.IsArchipelagoSave ||
+            purchase == null)
+        {
+            return;
+        }
+
+        purchase = purchase
+            .Where(item =>
+                !SephiriaMod
+                    .IsArchipelagoPermanentRewardTreeShopItem(
+                        item.id
+                    ))
+            .ToArray();
+    }
+}
+
+[HarmonyPatch(
+    typeof(PlayerAvatar),
+    nameof(PlayerAvatar.RequestMoveStage)
+)]
+public static class ArchipelagoDesertStagePatch
+{
+    public static void Prefix(
+        PlayerAvatar __instance,
+        ref string stageName)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        if (__instance == null ||
+            __instance.isInDungeon <= 0)
+        {
+            return;
+        }
+
+        if (DungeonManager.Instance == null)
+            return;
+
+        // ---------------------------------------------
+        // Desert_Chapter1 requested
+        // ---------------------------------------------
+
+        if (string.Equals(
+                stageName,
+                "Desert_Chapter1",
+                StringComparison.Ordinal))
+        {
+            StageEntity requestedStage =
+                DungeonManager.Instance.FindStage(
+                    "Desert_Chapter1"
+                );
+
+            StageEntity alternateStage =
+                DungeonManager.Instance.FindStage(
+                    "Desert_Chapter2"
+                );
+
+            // Only change it if Chapter1's desert does
+            // NOT exist in this race, but Chapter2's does.
+            if (requestedStage == null &&
+                alternateStage != null)
+            {
+                MelonLogger.Msg(
+                    $"[AP Chapter {SephiriaMod.GoalChapter}] " +
+                    $"Current race does not contain " +
+                    $"Desert_Chapter1. Using " +
+                    $"Desert_Chapter2."
+                );
+
+                stageName = "Desert_Chapter2";
+            }
+
+            return;
+        }
+
+        // ---------------------------------------------
+        // Desert_Chapter2 requested
+        // ---------------------------------------------
+
+        if (string.Equals(
+                stageName,
+                "Desert_Chapter2",
+                StringComparison.Ordinal))
+        {
+            StageEntity requestedStage =
+                DungeonManager.Instance.FindStage(
+                    "Desert_Chapter2"
+                );
+
+            StageEntity alternateStage =
+                DungeonManager.Instance.FindStage(
+                    "Desert_Chapter1"
+                );
+
+            // Same protection in the opposite direction.
+            if (requestedStage == null &&
+                alternateStage != null)
+            {
+                MelonLogger.Msg(
+                    $"[AP Chapter {SephiriaMod.GoalChapter}] " +
+                    $"Current race does not contain " +
+                    $"Desert_Chapter2. Using " +
+                    $"Desert_Chapter1."
+                );
+
+                stageName = "Desert_Chapter1";
+            }
+        }
+    }
+}
+
+[HarmonyPatch(
+    typeof(PlayerAvatar),
+    nameof(PlayerAvatar.RequestMoveStage)
+)]
+public static class RequestMoveStageDiagnosticPatch
+{
+    public static void Prefix(string stageName)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        MelonLogger.Msg(
+            $"[MOVE STAGE REQUEST DEBUG] " +
+            $"RequestMoveStage({stageName})"
+        );
+    }
+}
+
+[HarmonyPatch(
+    typeof(PlayerAvatar),
+    nameof(PlayerAvatar.ServerLoadStage)
+)]
+public static class StageQuestRequirementDiagnosticPatch
+{
+    public static void Prefix(
+        PlayerAvatar __instance,
+        string stageName)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        if (DungeonManager.Instance == null)
+        {
+            MelonLogger.Msg(
+                "[STAGE QUEST DEBUG] DungeonManager is null."
+            );
+            return;
+        }
+
+        RaceEntity race =
+            DungeonManager.Instance.Race;
+
+        StageEntity stage =
+            DungeonManager.Instance.FindStage(stageName);
+
+        MelonLogger.Msg(
+            "[STAGE QUEST DEBUG] " +
+            $"Destination={stageName} | " +
+            $"RaceId={DungeonManager.Instance.raceId} | " +
+            $"RaceRequirement=" +
+            $"{(race != null ? race.mainQuestProgressRequired : -1)} | " +
+            $"StageFound={stage != null} | " +
+            $"StageRequirement=" +
+            $"{(stage != null ? stage.requireQuestProgress : -1)}"
+        );
+
+        if (race != null &&
+            race.stages != null)
+        {
+            foreach (StageEntity raceStage in race.stages)
+            {
+                if (raceStage == null)
+                    continue;
+
+                MelonLogger.Msg(
+                    $"[STAGE QUEST DEBUG RACE STAGE] " +
+                    $"{raceStage.name}"
+                );
+            }
+        }
+
+        foreach (var connection in NetworkServer.connections)
+        {
+            if (connection.Value == null ||
+                connection.Value.identity == null)
+            {
+                continue;
+            }
+
+            PlayerAvatar player =
+                connection.Value.identity
+                    .GetComponent<PlayerAvatar>();
+
+            if (player == null)
+                continue;
+
+            PlayerLocalDataStorage data =
+                player.GetComponent<PlayerLocalDataStorage>();
+
+            if (data == null)
+                continue;
+
+            int progress = data.mainQuestProgress;
+
+            bool passesRace =
+                race == null ||
+                race.mainQuestProgressRequired == 0 ||
+                progress >= race.mainQuestProgressRequired;
+
+            bool passesStage =
+                stage == null ||
+                stage.requireQuestProgress == 0 ||
+                progress >= stage.requireQuestProgress;
+
+            MelonLogger.Msg(
+                "[STAGE QUEST DEBUG PLAYER] " +
+                $"Connection={connection.Key} | " +
+                $"MainQuestProgress={progress} | " +
+                $"IsInDungeon={player.isInDungeon} | " +
+                $"PassesRace={passesRace} | " +
+                $"PassesStage={passesStage}"
+            );
+        }
+    }
+}
+
+[HarmonyPatch(
+    typeof(PlayerAvatar),
+    "UserCode_RpcBroadcastFailedFromMainQuest__Int32"
+)]
+public static class MainQuestFailureDiagnosticPatch
+{
+    public static void Prefix(int type)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        MelonLogger.Msg(
+            $"[MAIN QUEST FAILURE DEBUG] Type={type}"
+        );
     }
 }
