@@ -97,8 +97,40 @@ costume_mission_location_table = {
     "Costume Mission - Wingless Bat": 2018,
 }
 
+boss_defeat_location_table = {
+    "Boss Defeat - Mogdi": 4001,
+    "Boss Defeat - Rataka": 4002,
+    "Boss Defeat - Erma": 4003,
+    "Boss Defeat - Askard": 4004,
+    "Boss Defeat - Odner": 4005,
+    "Boss Defeat - Lerid": 4006,
+    "Boss Defeat - Pentaxis": 4007,
+    "Boss Defeat - Kovess": 4008,
+    "Boss Defeat - Kraz": 4009,
+    "Boss Defeat - Haz": 4010,
+}
+
+
+boss_defeat_floor_table = {
+    "Boss Defeat - Mogdi": 1,
+    "Boss Defeat - Odner": 1,
+    "Boss Defeat - Haz": 1,
+
+    "Boss Defeat - Rataka": 2,
+    "Boss Defeat - Lerid": 2,
+
+    "Boss Defeat - Erma": 3,
+    "Boss Defeat - Pentaxis": 3,
+
+    "Boss Defeat - Askard": 4,
+
+    "Boss Defeat - Kovess": 5,
+    "Boss Defeat - Kraz": 5,
+}
+
 location_table = {
     **shrine_location_table,
     **sephirite_location_table,
     **costume_mission_location_table,
+    **boss_defeat_location_table
 }

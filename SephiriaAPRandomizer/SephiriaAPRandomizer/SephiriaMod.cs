@@ -191,6 +191,21 @@ namespace SephiriaAPRandomizer
                     { "Boss Reward Unlock: Kraz", 2008 },
                     { "Boss Reward Unlock: Haz", 2009 }
                 };
+        private static readonly Dictionary<int, long>
+            archipelagoBossDefeatLocations =
+                new Dictionary<int, long>
+                {
+                    { 2000, 4001 }, // Mogdi
+                    { 2001, 4002 }, // Rataka
+                    { 2002, 4003 }, // Erma
+                    { 2003, 4004 }, // Askard
+                    { 2004, 4005 }, // Odner
+                    { 2005, 4006 }, // Lerid
+                    { 2006, 4007 }, // Pentaxis
+                    { 2007, 4008 }, // Kovess
+                    { 2008, 4009 }, // Kraz
+                    { 2009, 4010 }  // Haz
+                };
         private static readonly HashSet<int> archipelagoPermanentRewardTreeShopIds = new HashSet<int>(archipelagoPermanentRewardItems.Values);
         private static readonly FieldInfo sephiriteRerollButtonGroupField = AccessTools.Field(typeof(UI_SephiriteRewardPanel), "rerollButtonGroup");
         private static readonly FieldInfo sephiriteSkipSelectButtonGroupField = AccessTools.Field(typeof(UI_SephiriteRewardPanel), "skipSelectButtonGroup");
@@ -3718,6 +3733,8 @@ namespace SephiriaAPRandomizer
             permanentItemSyncPending = true;
         }
 
+        public static event Action ArchipelagoPermanentRewardsChanged;
+
         private static void SetSephiritePanelGroupActive(
             UI_SephiriteRewardPanel panel,
             FieldInfo field,
@@ -3972,6 +3989,8 @@ namespace SephiriaAPRandomizer
 
             SynchronizeArchipelagoPermanentRewards(apSession);
 
+            ArchipelagoPermanentRewardsChanged?.Invoke();
+
             HashSet<string> ownedCostumeIds =
                 new HashSet<string>(
                     StringComparer.Ordinal
@@ -4217,6 +4236,120 @@ namespace SephiriaAPRandomizer
                 $"Starting={StartingCostumeId}, " +
                 $"RuntimeReady={CombatManager.Instance != null}"
             );
+        }
+
+        public static bool TryGetArchipelagoBossRewardInfo(
+            string bossName,
+            out string apItemName,
+            out TreeShopItemEntity treeShopItem,
+            out bool unlocked)
+        {
+            apItemName =
+                "Boss Reward Unlock: " + bossName;
+
+            treeShopItem = null;
+            unlocked = false;
+
+            int treeShopItemId;
+
+            if (!archipelagoPermanentRewardItems.TryGetValue(
+                    apItemName,
+                    out treeShopItemId))
+            {
+                return false;
+            }
+
+            treeShopItem =
+                TreeShopItemDatabase.FindById(
+                    treeShopItemId
+                );
+
+            ArchipelagoSession apSession =
+                session as ArchipelagoSession;
+
+            if (apSession != null)
+            {
+                string rewardItemName =
+                    apItemName;
+
+                unlocked =
+                    apSession.Items.AllItemsReceived.Any(
+                        receivedItem =>
+                            receivedItem != null &&
+                            string.Equals(
+                                receivedItem.ItemName,
+                                rewardItemName,
+                                StringComparison.Ordinal
+                            )
+                    );
+            }
+
+            return true;
+        }
+
+        public static bool TryCompleteArchipelagoBossDefeat(int treeShopRewardId)
+        {
+            if (!IsArchipelagoSave)
+                return false;
+
+            long locationId;
+
+            if (!archipelagoBossDefeatLocations.TryGetValue(
+                    treeShopRewardId,
+                    out locationId))
+            {
+                return false;
+            }
+
+            ArchipelagoSession apSession =
+                session as ArchipelagoSession;
+
+            if (apSession == null ||
+                !apSession.Socket.Connected)
+            {
+                MelonLogger.Warning(
+                    $"[AP Boss] Cannot check boss location " +
+                    $"{locationId}: Archipelago is disconnected."
+                );
+
+                return false;
+            }
+
+            // This boss location was already completed.
+            if (!apSession.Locations
+                    .AllMissingLocations
+                    .Contains(locationId))
+            {
+                return true;
+            }
+
+            string locationName =
+                apSession.Locations.GetLocationNameFromId(
+                    locationId,
+                    "Sephiria"
+                );
+
+            try
+            {
+                apSession.Locations.CompleteLocationChecks(
+                    locationId
+                );
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Error(
+                    $"[AP Boss] Failed to check " +
+                    $"{locationName}: {ex.Message}"
+                );
+
+                return false;
+            }
+
+            MelonLogger.Msg(
+                $"[AP Boss] Checked {locationName}."
+            );
+
+            return true;
         }
 
         private static void SynchronizeArchipelagoPermanentRewards(
@@ -6131,6 +6264,1446 @@ namespace SephiriaAPRandomizer
     }
 }
 
+public class ArchipelagoJournalTabState : MonoBehaviour
+{
+    public UI_TabButton[] OriginalButtons;
+    public UI_TabContent[] OriginalContents;
+
+    public UI_TabButton ArchipelagoButton;
+    public UI_TabContent ArchipelagoContent;
+
+    public ArchipelagoJournalContentController ArchipelagoController;
+
+    public HorizontalLayoutGroup TabLayout;
+    public float OriginalTabSpacing;
+
+    public TextMeshProUGUI[] ArchipelagoButtonTexts;
+
+    public bool Initialized;
+
+    private void LateUpdate()
+    {
+        if (ArchipelagoButtonTexts == null)
+            return;
+
+        foreach (TextMeshProUGUI text in ArchipelagoButtonTexts)
+        {
+            if (text != null && text.text != "AP")
+            {
+                text.text = "AP";
+            }
+        }
+    }
+}
+
+public class ArchipelagoJournalContentController : MonoBehaviour
+{
+    private UI_JournalContent_Lore layout;
+
+    // Keep this name because the AP-tab controller
+    // navigation already points to this first button.
+    private readonly List<UI_JournalPanel_SearchOptionButton>
+        chapterButtons =
+            new List<UI_JournalPanel_SearchOptionButton>();
+
+    private readonly List<GameObject>
+        bossButtons =
+            new List<GameObject>();
+
+    private UI_JournalPanel_SearchOptionButton selectedFloorButton;
+
+    private string selectedBossName;
+    private GameObject subTabRoot;
+    private UI_HorayButton bossRewardsTabButton;
+    private UI_HorayButton upgradesTabButton;
+    private Button bossRewardsClickable;
+    private Button upgradesClickable;
+
+    private readonly HashSet<GameObject> bossRewardsSectionRoots = new HashSet<GameObject>();
+    private bool showingUpgrades;
+    public string SelectedFloor { get; private set; } = "Mole Stronghold";
+
+
+    // =========================================================
+    // Floor -> Boss layout
+    // =========================================================
+
+    private static readonly Dictionary<string, string[]>
+        bossesByFloor =
+            new Dictionary<string, string[]>(
+                StringComparer.Ordinal
+            )
+            {
+                {
+                    "Mole Stronghold",
+                    new[]
+                    {
+                        "Mogdi",
+                        "Odner",
+                        "Haz"
+                    }
+                },
+                {
+                    "Woodlands",
+                    new[]
+                    {
+                        "Rataka",
+                        "Lerid"
+                    }
+                },
+                {
+                    "Library",
+                    new[]
+                    {
+                        "Erma",
+                        "Pentaxis"
+                    }
+                },
+                {
+                    "Wasteland",
+                    new[]
+                    {
+                        "Askard"
+                    }
+                },
+                {
+                    "Rooted Cave",
+                    new[]
+                    {
+                        "Kovess",
+                        "Kraz"
+                    }
+                }
+            };
+
+
+    // =========================================================
+    // Initialization
+    // =========================================================
+
+    public void Initialize(
+        UI_JournalContent_Lore loreLayout,
+        Transform itemJournalRoot)
+    {
+        layout = loreLayout;
+
+        SephiriaMod.ArchipelagoPermanentRewardsChanged -=
+            RefreshRewardStates;
+
+        SephiriaMod.ArchipelagoPermanentRewardsChanged +=
+            RefreshRewardStates;
+
+        if (layout == null ||
+            layout.locationIconContainer == null ||
+            layout.locationIconOriginal == null ||
+            layout.loreIconContainer == null ||
+            layout.loreIconOriginal == null)
+        {
+            MelonLogger.Warning(
+                "[AP Journal] Could not initialize " +
+                "floor/boss journal."
+            );
+
+            return;
+        }
+
+        if (layout.loreInfo != null)
+        {
+            layout.loreInfo.SetActive(false);
+        }
+
+        BuildSubTabs(itemJournalRoot);
+
+        BuildFloorButtons();
+
+        ShowBossRewards();
+    }
+
+
+    // =========================================================
+    // Controller navigation
+    // =========================================================
+
+    // Keep this method name so the working AP-tab
+    // controller-navigation code does not need to change.
+    public Button GetFirstSubTabButton()
+    {
+        if (bossRewardsClickable != null)
+        {
+            return bossRewardsClickable;
+        }
+
+        return GetFirstFloorButton();
+    }
+
+    private Button GetFirstFloorButton()
+    {
+        if (chapterButtons.Count == 0 ||
+            chapterButtons[0] == null)
+        {
+            return null;
+        }
+
+        Button button =
+            chapterButtons[0]
+                .GetComponent<Button>();
+
+        if (button == null)
+        {
+            button =
+                chapterButtons[0]
+                    .GetComponentInChildren<Button>(
+                        true
+                    );
+        }
+
+        return button;
+    }
+
+    // =========================================================
+    // AP subtabs
+    // =========================================================
+
+    private void BuildSubTabs(
+    Transform itemJournalRoot)
+    {
+        if (itemJournalRoot == null)
+        {
+            MelonLogger.Warning(
+                "[AP Journal] Item journal was null. " +
+                "AP subtabs were not created."
+            );
+
+            return;
+        }
+
+        // -------------------------------------------------
+        // Find Sephiria's actual Item inner-tab bar.
+        //
+        // Runtime hierarchy:
+        // InnerTab_Button
+        //   InnerTab_Button_Charm
+        //   InnerTab_Button_StoneTablet
+        //   InnerTab_Button_Combo
+        //   InnerTab_Button_Misc
+        // -------------------------------------------------
+
+        Transform sourceTabRoot =
+            itemJournalRoot.Find(
+                "InnerTab_Button"
+            );
+
+        if (sourceTabRoot == null)
+        {
+            MelonLogger.Warning(
+                "[AP Journal] Could not find " +
+                "Item journal InnerTab_Button."
+            );
+
+            return;
+        }
+
+        Transform sourceArtifactTransform =
+            sourceTabRoot.Find(
+                "InnerTab_Button_Charm"
+            );
+
+        Transform sourceTabletTransform =
+            sourceTabRoot.Find(
+                "InnerTab_Button_StoneTablet"
+            );
+
+        if (sourceArtifactTransform == null ||
+            sourceTabletTransform == null)
+        {
+            MelonLogger.Warning(
+                "[AP Journal] Could not find the " +
+                "Artifact/Tablet inner-tab objects."
+            );
+
+            return;
+        }
+
+        UI_HorayButton sourceArtifactTab =
+            sourceArtifactTransform
+                .GetComponent<UI_HorayButton>();
+
+        UI_HorayButton sourceTabletTab =
+            sourceTabletTransform
+                .GetComponent<UI_HorayButton>();
+
+        if (sourceArtifactTab == null ||
+            sourceTabletTab == null)
+        {
+            MelonLogger.Warning(
+                "[AP Journal] Artifact/Tablet objects " +
+                "did not contain UI_HorayButton."
+            );
+
+            return;
+        }
+
+        MelonLogger.Msg(
+            "[AP Journal] Found vanilla Item inner tabs."
+        );
+
+        // -------------------------------------------------
+        // Clone the entire vanilla inner-tab bar.
+        // -------------------------------------------------
+
+        subTabRoot =
+            UnityEngine.Object.Instantiate(
+                sourceTabRoot.gameObject
+            );
+
+        subTabRoot.name =
+            "ArchipelagoSubTabBar";
+
+        // Item and AP journal contents occupy the same
+        // journal area, so preserve the vanilla bar's
+        // screen position when moving it into the AP page.
+        RectTransform sourceRect = sourceTabRoot.GetComponent<RectTransform>();
+        RectTransform clonedRect = subTabRoot.GetComponent<RectTransform>();
+
+        subTabRoot.transform.SetParent(
+            layout.transform,
+            false
+        );
+
+        if (sourceRect != null &&
+            clonedRect != null)
+        {
+            clonedRect.anchorMin =
+                sourceRect.anchorMin;
+
+            clonedRect.anchorMax =
+                sourceRect.anchorMax;
+
+            clonedRect.pivot =
+                sourceRect.pivot;
+
+            clonedRect.anchoredPosition =
+                sourceRect.anchoredPosition;
+
+            clonedRect.sizeDelta =
+                sourceRect.sizeDelta;
+
+            clonedRect.localScale =
+                sourceRect.localScale;
+
+            clonedRect.localRotation =
+                sourceRect.localRotation;
+        }
+
+        // -------------------------------------------------
+        // Find the two cloned buttons we want to keep.
+        // -------------------------------------------------
+
+        Transform bossRewardsTransform =
+            subTabRoot.transform.Find(
+                "InnerTab_Button_Charm"
+            );
+
+        Transform upgradesTransform =
+            subTabRoot.transform.Find(
+                "InnerTab_Button_StoneTablet"
+            );
+
+        if (bossRewardsTransform == null ||
+            upgradesTransform == null)
+        {
+            MelonLogger.Warning(
+                "[AP Journal] Could not resolve cloned " +
+                "Boss Rewards / Upgrades buttons."
+            );
+
+            UnityEngine.Object.Destroy(
+                subTabRoot
+            );
+
+            subTabRoot = null;
+
+            return;
+        }
+
+        bossRewardsTabButton =
+            bossRewardsTransform
+                .GetComponent<UI_HorayButton>();
+
+        upgradesTabButton =
+            upgradesTransform
+                .GetComponent<UI_HorayButton>();
+
+        if (bossRewardsTabButton == null ||
+            upgradesTabButton == null)
+        {
+            MelonLogger.Warning(
+                "[AP Journal] Cloned inner tabs did not " +
+                "contain UI_HorayButton."
+            );
+
+            UnityEngine.Object.Destroy(
+                subTabRoot
+            );
+
+            subTabRoot = null;
+            bossRewardsTabButton = null;
+            upgradesTabButton = null;
+
+            return;
+        }
+
+        // -------------------------------------------------
+        // Remove the tabs we do NOT want.
+        //
+        // Combo = vanilla Combo tab
+        // Misc  = fourth vanilla inner-tab control
+        // -------------------------------------------------
+
+        Transform comboTransform =
+            subTabRoot.transform.Find(
+                "InnerTab_Button_Combo"
+            );
+
+        if (comboTransform != null)
+        {
+            comboTransform.gameObject.SetActive(
+                false
+            );
+        }
+
+        Transform miscTransform =
+            subTabRoot.transform.Find(
+                "InnerTab_Button_Misc"
+            );
+
+        if (miscTransform != null)
+        {
+            miscTransform.gameObject.SetActive(
+                false
+            );
+        }
+
+        // -------------------------------------------------
+        // Rename the two remaining tabs.
+        // -------------------------------------------------
+
+        SetTabLabel(
+            bossRewardsTabButton,
+            "Boss Rewards"
+        );
+
+        SetTabLabel(
+            upgradesTabButton,
+            "Upgrades"
+        );
+
+        // UI_HorayButton inherits from Button, so these
+        // are already the clickable components.
+        bossRewardsClickable =
+            bossRewardsTabButton;
+
+        upgradesClickable =
+            upgradesTabButton;
+
+        // Remove the Item journal's original click actions.
+        bossRewardsClickable.onClick =
+            new Button.ButtonClickedEvent();
+
+        upgradesClickable.onClick =
+            new Button.ButtonClickedEvent();
+
+        bossRewardsClickable.onClick.AddListener(
+            ShowBossRewards
+        );
+
+        upgradesClickable.onClick.AddListener(
+            ShowUpgrades
+        );
+
+        // -------------------------------------------------
+        // Reserve vertical room above the existing
+        // floor/boss interface for this new row.
+        // -------------------------------------------------
+
+        RectTransform artifactRect =
+            sourceArtifactTab
+                .GetComponent<RectTransform>();
+
+        RectTransform tabletRect =
+            sourceTabletTab
+                .GetComponent<RectTransform>();
+
+        float tabHeight = 0f;
+
+        if (artifactRect != null)
+        {
+            tabHeight =
+                Mathf.Max(
+                    tabHeight,
+                    artifactRect.rect.height
+                );
+        }
+
+        if (tabletRect != null)
+        {
+            tabHeight =
+                Mathf.Max(
+                    tabHeight,
+                    tabletRect.rect.height
+                );
+        }
+
+        if (tabHeight > 0f)
+        {
+            ReserveBossRewardsSpace(
+                tabHeight
+            );
+        }
+        else
+        {
+            MelonLogger.Warning(
+                "[AP Journal] Could not determine " +
+                "subtab height."
+            );
+        }
+
+        UpdateSubTabVisuals();
+
+        MelonLogger.Msg(
+            "[AP Journal] Added Boss Rewards / " +
+            "Upgrades subtabs."
+        );
+    }
+
+    public void ConfigureNavigation(Button topTabButton)
+    {
+        if (topTabButton == null)
+            return;
+
+        Button firstFloorButton =
+            GetFirstFloorButton();
+
+        Button firstSelectable =
+            bossRewardsClickable != null
+                ? bossRewardsClickable
+                : firstFloorButton;
+
+        // ---------------------------------------------
+        // AP top tab
+        // ---------------------------------------------
+
+        Selectable left =
+            topTabButton.FindSelectableOnLeft();
+
+        Selectable right =
+            topTabButton.FindSelectableOnRight();
+
+        Selectable up =
+            topTabButton.FindSelectableOnUp();
+
+        Navigation topNavigation =
+            topTabButton.navigation;
+
+        topNavigation.mode =
+            Navigation.Mode.Explicit;
+
+        topNavigation.selectOnLeft = left;
+        topNavigation.selectOnRight = right;
+        topNavigation.selectOnUp = up;
+        topNavigation.selectOnDown =
+            firstSelectable;
+
+        topTabButton.navigation =
+            topNavigation;
+
+        if (bossRewardsClickable == null ||
+            upgradesClickable == null)
+        {
+            return;
+        }
+
+        // ---------------------------------------------
+        // Boss Rewards
+        // ---------------------------------------------
+
+        Navigation bossNavigation =
+            bossRewardsClickable.navigation;
+
+        bossNavigation.mode =
+            Navigation.Mode.Explicit;
+
+        bossNavigation.selectOnLeft = null;
+        bossNavigation.selectOnRight =
+            upgradesClickable;
+
+        bossNavigation.selectOnUp =
+            topTabButton;
+
+        bossNavigation.selectOnDown =
+            firstFloorButton;
+
+        bossRewardsClickable.navigation =
+            bossNavigation;
+
+        // ---------------------------------------------
+        // Upgrades
+        // ---------------------------------------------
+
+        Navigation upgradesNavigation =
+            upgradesClickable.navigation;
+
+        upgradesNavigation.mode =
+            Navigation.Mode.Explicit;
+
+        upgradesNavigation.selectOnLeft =
+            bossRewardsClickable;
+
+        upgradesNavigation.selectOnRight = null;
+
+        upgradesNavigation.selectOnUp =
+            topTabButton;
+
+        // Empty for now.
+        upgradesNavigation.selectOnDown = null;
+
+        upgradesClickable.navigation =
+            upgradesNavigation;
+
+        // ---------------------------------------------
+        // First floor -> back to Boss Rewards
+        // ---------------------------------------------
+
+        if (firstFloorButton != null)
+        {
+            Selectable floorLeft =
+                firstFloorButton.FindSelectableOnLeft();
+
+            Selectable floorRight =
+                firstFloorButton.FindSelectableOnRight();
+
+            Selectable floorDown =
+                firstFloorButton.FindSelectableOnDown();
+
+            Navigation floorNavigation =
+                firstFloorButton.navigation;
+
+            floorNavigation.mode =
+                Navigation.Mode.Explicit;
+
+            floorNavigation.selectOnLeft =
+                floorLeft;
+
+            floorNavigation.selectOnRight =
+                floorRight;
+
+            floorNavigation.selectOnUp =
+                bossRewardsClickable;
+
+            floorNavigation.selectOnDown =
+                floorDown;
+
+            firstFloorButton.navigation =
+                floorNavigation;
+        }
+    }
+
+    private void SetTabLabel(
+        UI_HorayButton tabButton,
+        string label)
+    {
+        if (tabButton == null)
+            return;
+
+        // Disable the vanilla localization component on
+        // this cloned button. Otherwise Sephiria could
+        // replace our custom text with Artifact/Tablet
+        // again when localization refreshes.
+        MonoBehaviour[] behaviours =
+            tabButton
+                .GetComponentsInChildren<MonoBehaviour>(
+                    true
+                );
+
+        foreach (MonoBehaviour behaviour
+            in behaviours)
+        {
+            if (behaviour == null)
+                continue;
+
+            if (behaviour.GetType().Name ==
+                "UI_LocalizationStringText")
+            {
+                behaviour.enabled = false;
+            }
+        }
+
+        TextMeshProUGUI[] texts =
+            tabButton
+                .GetComponentsInChildren<
+                    TextMeshProUGUI>(
+                        true
+                    );
+
+        foreach (TextMeshProUGUI text
+            in texts)
+        {
+            if (text != null)
+            {
+                text.text = label;
+            }
+        }
+    }
+
+    private void ReserveBossRewardsSpace(
+        float tabHeight)
+    {
+        bossRewardsSectionRoots.Clear();
+
+        RegisterBossRewardsSection(
+            layout.locationIconContainer
+        );
+
+        RegisterBossRewardsSection(
+            layout.loreIconContainer
+        );
+
+        foreach (GameObject section
+            in bossRewardsSectionRoots)
+        {
+            if (section == null)
+                continue;
+
+            RectTransform rect =
+                section.GetComponent<RectTransform>();
+
+            if (rect == null)
+                continue;
+
+            // Keep the bottom exactly where it is.
+            // Only move the top downward enough to make
+            // room for the new subtab row.
+            Vector2 offsetMax =
+                rect.offsetMax;
+
+            offsetMax.y -=
+                tabHeight;
+
+            rect.offsetMax =
+                offsetMax;
+        }
+    }
+
+    private void RegisterBossRewardsSection(
+        Transform child)
+    {
+        if (child == null ||
+            layout == null)
+        {
+            return;
+        }
+
+        Transform current =
+            child;
+
+        // Find the highest object belonging to this
+        // section without leaving the AP content root.
+        while (current.parent != null &&
+               current.parent != layout.transform)
+        {
+            current =
+                current.parent;
+        }
+
+        if (current.parent != layout.transform)
+        {
+            MelonLogger.Warning(
+                "[AP Journal] Could not resolve a " +
+                "Boss Rewards section root."
+            );
+
+            return;
+        }
+
+        bossRewardsSectionRoots.Add(
+            current.gameObject
+        );
+    }
+
+    private void ShowBossRewards()
+    {
+        showingUpgrades = false;
+
+        foreach (GameObject section
+            in bossRewardsSectionRoots)
+        {
+            if (section != null)
+            {
+                section.SetActive(true);
+            }
+        }
+
+        UpdateSubTabVisuals();
+
+        if (!string.IsNullOrEmpty(
+                selectedBossName))
+        {
+            ShowBossInfo(
+                selectedBossName
+            );
+        }
+        else if (layout != null &&
+                 layout.loreInfo != null)
+        {
+            layout.loreInfo.SetActive(false);
+        }
+    }
+
+    private void ShowUpgrades()
+    {
+        showingUpgrades = true;
+
+        foreach (GameObject section
+            in bossRewardsSectionRoots)
+        {
+            if (section != null)
+            {
+                section.SetActive(false);
+            }
+        }
+
+        // Upgrades has no content yet.
+        if (layout != null &&
+            layout.loreInfo != null)
+        {
+            layout.loreInfo.SetActive(false);
+        }
+
+        UpdateSubTabVisuals();
+    }
+
+    private void UpdateSubTabVisuals()
+    {
+        SetInnerTabActive(
+            bossRewardsTabButton,
+            !showingUpgrades
+        );
+
+        SetInnerTabActive(
+            upgradesTabButton,
+            showingUpgrades
+        );
+    }
+
+    private void SetInnerTabActive(
+        UI_HorayButton tabButton,
+        bool active)
+    {
+        if (tabButton == null)
+            return;
+
+        Transform activeIndicator =
+            tabButton.transform.Find(
+                "innerTabActive"
+            );
+
+        if (activeIndicator != null)
+        {
+            activeIndicator.gameObject.SetActive(
+                active
+            );
+        }
+    }
+
+    // =========================================================
+    // Floor list
+    // =========================================================
+
+    private void BuildFloorButtons()
+    {
+        if (chapterButtons.Count > 0)
+            return;
+
+        string[] floors =
+        {
+            "Mole Stronghold",
+            "Woodlands",
+            "Library",
+            "Wasteland",
+            "Rooted Cave"
+        };
+
+        foreach (string floor in floors)
+        {
+            UI_JournalPanel_SearchOptionButton button =
+                UnityEngine.Object.Instantiate(
+                    layout.locationIconOriginal,
+                    layout.locationIconContainer
+                );
+
+            button.gameObject.name =
+                "APFloor_" +
+                floor.Replace(" ", "");
+
+            button.gameObject.SetActive(true);
+
+            button.Initialize(
+                floor,
+                floor,
+                OnFloorClicked
+            );
+
+            Transform redDot =
+                button.transform.Find("RedDot");
+
+            if (redDot != null)
+            {
+                redDot.gameObject.SetActive(false);
+            }
+
+            button.SetSelected(false);
+
+            chapterButtons.Add(button);
+        }
+
+        if (chapterButtons.Count > 0)
+        {
+            SelectFloor(
+                chapterButtons[0]
+            );
+        }
+    }
+
+
+    // =========================================================
+    // Floor selection
+    // =========================================================
+
+    private void OnFloorClicked(
+        UI_JournalPanel_SearchOptionButton button)
+    {
+        SelectFloor(button);
+    }
+
+    private void SelectFloor(
+        UI_JournalPanel_SearchOptionButton button)
+    {
+        if (button == null)
+            return;
+
+        if (selectedFloorButton != null &&
+            selectedFloorButton != button)
+        {
+            selectedFloorButton.SetSelected(false);
+        }
+
+        selectedFloorButton = button;
+
+        selectedFloorButton.SetSelected(true);
+
+        SelectedFloor =
+            selectedFloorButton.data;
+
+        BuildBossButtons(
+            SelectedFloor
+        );
+
+        MelonLogger.Msg(
+            $"[AP Journal] Selected floor " +
+            $"{SelectedFloor}."
+        );
+    }
+
+
+    // =========================================================
+    // Boss list
+    // =========================================================
+
+    private void BuildBossButtons(
+        string floorName)
+    {
+        ClearBossButtons();
+
+        string[] bosses;
+
+        if (!bossesByFloor.TryGetValue(
+                floorName,
+                out bosses))
+        {
+            if (layout.loreInfo != null)
+            {
+                layout.loreInfo.SetActive(false);
+            }
+
+            return;
+        }
+
+        foreach (string bossName in bosses)
+        {
+            CreateBossButton(
+                bossName
+            );
+        }
+
+        // Show the first boss's information immediately,
+        // just like Lore shows content for the selected
+        // category.
+        if (bosses.Length > 0)
+        {
+            ShowBossInfo(
+                bosses[0]
+            );
+        }
+        else if (layout.loreInfo != null)
+        {
+            layout.loreInfo.SetActive(false);
+        }
+    }
+
+
+    private void CreateBossButton(
+        string bossName)
+    {
+        GameObject bossObject =
+            UnityEngine.Object.Instantiate(
+                layout.loreIconOriginal.gameObject,
+                layout.loreIconContainer
+            );
+
+        bossObject.name =
+            "APBoss_" + bossName;
+
+        UI_JournalPanel_LoreIcon loreIcon =
+            bossObject.GetComponent<
+                UI_JournalPanel_LoreIcon>();
+
+        TextMeshProUGUI label = null;
+
+        if (loreIcon != null)
+        {
+            label = loreIcon.text;
+        }
+
+        if (label == null)
+        {
+            label =
+                bossObject
+                    .GetComponentInChildren<
+                        TextMeshProUGUI>(
+                            true
+                        );
+        }
+
+        string apItemName;
+        TreeShopItemEntity treeShopItem;
+        bool unlocked;
+
+        bool foundReward =
+            SephiriaMod
+                .TryGetArchipelagoBossRewardInfo(
+                    bossName,
+                    out apItemName,
+                    out treeShopItem,
+                    out unlocked
+                );
+
+        if (label != null)
+        {
+            label.text =
+                bossName +
+                "\n" +
+                (
+                    foundReward && unlocked
+                        ? "<color=#00FF00>UNLOCKED</color>"
+                        : "LOCKED"
+                );
+        }
+
+        // We only want the Lore prefab's visuals.
+        // Its normal Lore behavior must not run.
+        if (loreIcon != null)
+        {
+            UnityEngine.Object.Destroy(
+                loreIcon
+            );
+        }
+
+        Transform redDot =
+            bossObject.transform.Find(
+                "RedDot"
+            );
+
+        if (redDot != null)
+        {
+            redDot.gameObject.SetActive(false);
+        }
+
+        Button bossButton =
+            bossObject.GetComponent<Button>();
+
+        if (bossButton == null)
+        {
+            bossButton =
+                bossObject.AddComponent<Button>();
+        }
+
+        bossButton.onClick =
+            new Button.ButtonClickedEvent();
+
+        string capturedBossName =
+            bossName;
+
+        bossButton.onClick.AddListener(
+            delegate
+            {
+                ShowBossInfo(
+                    capturedBossName
+                );
+            }
+        );
+
+        // Also update the right panel when a controller
+        // moves onto this boss. The player should not
+        // have to press the button just to read it.
+        ArchipelagoJournalBossSelectionHandler
+            selectionHandler =
+                bossObject.AddComponent<
+                    ArchipelagoJournalBossSelectionHandler>();
+
+        selectionHandler.Initialize(
+            delegate
+            {
+                ShowBossInfo(
+                    capturedBossName
+                );
+            }
+        );
+
+        bossObject.SetActive(true);
+
+        bossButtons.Add(
+            bossObject
+        );
+    }
+
+
+    private void ClearBossButtons()
+    {
+        foreach (GameObject bossButton
+            in bossButtons)
+        {
+            if (bossButton == null)
+                continue;
+
+            bossButton.SetActive(false);
+
+            UnityEngine.Object.Destroy(
+                bossButton
+            );
+        }
+
+        bossButtons.Clear();
+    }
+
+
+    // =========================================================
+    // Right-side permanent reward panel
+    // =========================================================
+
+    private void ShowBossInfo(
+        string bossName)
+    {
+        if (layout == null ||
+            layout.loreInfo == null)
+        {
+            return;
+        }
+
+        selectedBossName = bossName;
+
+        string apItemName;
+        TreeShopItemEntity treeShopItem;
+        bool unlocked;
+
+        bool foundReward =
+            SephiriaMod
+                .TryGetArchipelagoBossRewardInfo(
+                    bossName,
+                    out apItemName,
+                    out treeShopItem,
+                    out unlocked
+                );
+
+        if (layout.loreInfo_Title != null)
+        {
+            layout.loreInfo_Title.text =
+                bossName;
+        }
+
+        if (layout.loreImageSlot != null)
+        {
+            layout.loreImageSlot.SetActive(
+                false
+            );
+        }
+
+        if (layout.loreInfo_Description != null)
+        {
+            string description;
+
+            if (!foundReward)
+            {
+                description =
+                    "Permanent reward data " +
+                    "could not be found.";
+            }
+            else
+            {
+                description =
+                    unlocked
+                        ? "<color=#00FF00>UNLOCKED</color>"
+                        : "LOCKED\nReceive \"" +
+                          apItemName +
+                          "\" to unlock.";
+
+                description +=
+                    "\n\nPermanent Rewards";
+
+                if (treeShopItem != null &&
+                    treeShopItem.items != null)
+                {
+                    foreach (ItemEntity itemEntity
+                        in treeShopItem.items)
+                    {
+                        if (itemEntity == null)
+                            continue;
+
+                        description +=
+                            "\n• " +
+                            itemEntity.Name;
+                    }
+                }
+            }
+
+            layout.loreInfo_Description.text =
+                description;
+        }
+
+        layout.loreInfo.SetActive(true);
+
+        MelonLogger.Msg(
+            $"[AP Journal] Selected boss " +
+            $"{bossName} | " +
+            $"{(unlocked ? "UNLOCKED" : "LOCKED")}."
+        );
+    }
+
+    private void RefreshRewardStates()
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        const string bossPrefix = "APBoss_";
+
+        foreach (GameObject bossObject in bossButtons)
+        {
+            if (bossObject == null)
+                continue;
+
+            if (!bossObject.name.StartsWith(
+                    bossPrefix,
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            string bossName =
+                bossObject.name.Substring(
+                    bossPrefix.Length
+                );
+
+            string apItemName;
+            TreeShopItemEntity treeShopItem;
+            bool unlocked;
+
+            bool foundReward =
+                SephiriaMod
+                    .TryGetArchipelagoBossRewardInfo(
+                        bossName,
+                        out apItemName,
+                        out treeShopItem,
+                        out unlocked
+                    );
+
+            TextMeshProUGUI label =
+                bossObject
+                    .GetComponentInChildren<
+                        TextMeshProUGUI>(
+                            true
+                        );
+
+            if (label != null)
+            {
+                label.text =
+                    bossName +
+                    "\n" +
+                    (
+                        foundReward && unlocked
+                            ? "<color=#00FF00>UNLOCKED</color>"
+                            : "LOCKED"
+                    );
+            }
+        }
+
+        // Refresh the currently displayed boss too.
+        if (!showingUpgrades && !string.IsNullOrEmpty(selectedBossName))
+        {
+            ShowBossInfo(selectedBossName);
+        }
+    }
+
+    private void OnDestroy()
+    {
+        SephiriaMod.ArchipelagoPermanentRewardsChanged -=
+            RefreshRewardStates;
+    }
+}
+
+public class ArchipelagoJournalBossSelectionHandler :
+    MonoBehaviour,
+    UnityEngine.EventSystems.ISelectHandler
+{
+    private Action onSelected;
+
+    public void Initialize(
+        Action callback)
+    {
+        onSelected = callback;
+    }
+
+    public void OnSelect(
+        UnityEngine.EventSystems.BaseEventData eventData)
+    {
+        onSelected?.Invoke();
+    }
+}
+
+public class ArchipelagoTreeShopModeController : MonoBehaviour
+{
+    public enum TreeMode
+    {
+        ArchipelagoTree,
+        ReceivedUpgrades
+    }
+
+    public static TreeMode CurrentMode { get; private set; } = TreeMode.ArchipelagoTree;
+
+    private UI_TreeShopPanel panel;
+
+
+    public void Initialize(
+        UI_TreeShopPanel treeShopPanel)
+    {
+        panel = treeShopPanel;
+
+        ShowArchipelagoTree();
+    }
+
+
+    private void Update()
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        if (panel == null ||
+            !panel.gameObject.activeInHierarchy)
+        {
+            return;
+        }
+
+        if (!UIInputModule.current)
+            return;
+
+        bool previousTab = false;
+        bool nextTab = false;
+
+        if (ControlsChangeHandler.Current
+            .IsUsingKeyboardAndMouse)
+        {
+            previousTab =
+                UIInputModule.current
+                    .prevTabAction
+                    .action
+                    .WasPressedThisFrame();
+
+            nextTab =
+                UIInputModule.current
+                    .nextTabAction
+                    .action
+                    .WasPressedThisFrame();
+        }
+        else
+        {
+            Gamepad gamepad =
+                Gamepad.current;
+
+            previousTab =
+                gamepad?.leftShoulder
+                    .wasPressedThisFrame
+                ?? false;
+
+            nextTab =
+                gamepad?.rightShoulder
+                    .wasPressedThisFrame
+                ?? false;
+        }
+
+        if (previousTab)
+        {
+            ShowArchipelagoTree();
+        }
+
+        if (nextTab)
+        {
+            ShowReceivedUpgrades();
+        }
+    }
+
+
+    private void ShowArchipelagoTree()
+    {
+        if (CurrentMode ==
+            TreeMode.ArchipelagoTree)
+        {
+            return;
+        }
+
+        CurrentMode =
+            TreeMode.ArchipelagoTree;
+
+        MelonLogger.Msg(
+            "[AP Tree] Mode: Archipelago Tree"
+        );
+    }
+
+
+    private void ShowReceivedUpgrades()
+    {
+        if (CurrentMode ==
+            TreeMode.ReceivedUpgrades)
+        {
+            return;
+        }
+
+        CurrentMode =
+            TreeMode.ReceivedUpgrades;
+
+        MelonLogger.Msg(
+            "[AP Tree] Mode: Received Upgrades"
+        );
+    }
+}
+
 [HarmonyPatch(typeof(UI_TitleLobby), "CheckAndStart")]
 public static class ArchipelagoSaveChoicePatch
 {
@@ -7231,6 +8804,19 @@ public static class NewGamePatch
         if (!SephiriaMod.IsArchipelagoSave)
             return;
 
+        // Hard Mode is already enabled and controlled by Archipelago.
+        // Mark Root's Retreat as purchased so the player is never
+        // prompted to purchase the free vanilla Hard Mode unlock.
+        SaveManager.Current.SetInt(
+            "TreeShopItem_3000_PurchasedCount",
+            1
+        );
+
+        SaveManager.Current.SetInt(
+            "TreeShopItem_3000_PaidPrice",
+            0
+        );
+
         SaveManager.Current.SetBool(
             "HardModeUnlockTutorial",
             true
@@ -7283,6 +8869,11 @@ public static class NewGamePatch
 
         SaveManager.Current.SetBool(
             "CostumeTutorial",
+            false
+        );
+
+        SaveManager.Current.SetBool(
+            "SapphireTutorial",
             false
         );
 
@@ -10751,6 +12342,463 @@ public static class MainQuestFailureDiagnosticPatch
 
         MelonLogger.Msg(
             $"[MAIN QUEST FAILURE DEBUG] Type={type}"
+        );
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_JournalPanel),
+    nameof(UI_JournalPanel.Connect)
+)]
+public static class ArchipelagoJournalConnectPatch
+{
+    private const int ArchipelagoTabIndex = 4;
+
+    public static void Postfix(
+        UI_JournalPanel __instance)
+    {
+        if (__instance == null ||
+            __instance.tab == null)
+        {
+            return;
+        }
+
+        ArchipelagoJournalTabState state =
+            __instance.GetComponent<
+                ArchipelagoJournalTabState>();
+
+        // ---------------------------------------------
+        // Normal save
+        // ---------------------------------------------
+        // If this journal object was previously used by
+        // an AP save, restore its original vanilla state.
+        // ---------------------------------------------
+
+        if (!SephiriaMod.IsArchipelagoSave)
+        {
+            if (state != null &&
+                state.Initialized)
+            {
+                RestoreVanillaJournal(
+                    __instance,
+                    state
+                );
+            }
+
+            return;
+        }
+
+        // Already built for this journal instance.
+        if (state != null &&
+            state.Initialized)
+        {
+            return;
+        }
+
+        UI_Tab tab =
+            __instance.tab;
+
+        // We know the vanilla journal has exactly:
+        //
+        // 0 = Item
+        // 1 = Weapon
+        // 2 = Miracle
+        // 3 = Lore
+        //
+        // If that is ever not true, do not modify it.
+        if (tab.tabButtons == null ||
+            tab.tabContents == null ||
+            tab.tabButtons.Length != 4 ||
+            tab.tabContents.Length != 4)
+        {
+            MelonLogger.Warning(
+                "[AP Journal] Expected 4 vanilla " +
+                "journal tabs. AP tab was not added."
+            );
+
+            return;
+        }
+
+        if (__instance.loreJournalContent == null)
+        {
+            MelonLogger.Warning(
+                "[AP Journal] Lore content was null. " +
+                "AP tab was not added."
+            );
+
+            return;
+        }
+
+        if (state == null)
+        {
+            state =
+                __instance.gameObject
+                    .AddComponent<
+                        ArchipelagoJournalTabState>();
+        }
+
+        state.OriginalButtons =
+            tab.tabButtons;
+
+        state.OriginalContents =
+            tab.tabContents;
+
+        state.TabLayout =
+            tab.tabButtons[0]
+                .transform
+                .parent
+                .GetComponent<HorizontalLayoutGroup>();
+
+        if (state.TabLayout != null)
+        {
+            state.OriginalTabSpacing =
+                state.TabLayout.spacing;
+        }
+
+        // =============================================
+        // Clone the Lore top-level button
+        // =============================================
+
+        UI_TabButton loreButton =
+            tab.tabButtons[3];
+
+        RectTransform tabParent = loreButton.transform.parent
+        as RectTransform;
+
+        HorizontalLayoutGroup horizontalLayout =
+            loreButton.transform.parent
+                .GetComponent<HorizontalLayoutGroup>();
+
+        GridLayoutGroup gridLayout =
+            loreButton.transform.parent
+                .GetComponent<GridLayoutGroup>();
+
+        MelonLogger.Msg(
+            "[AP Journal Layout] " +
+            $"Parent={loreButton.transform.parent.name} | " +
+            $"HorizontalLayout={horizontalLayout != null} | " +
+            $"GridLayout={gridLayout != null}"
+        );
+
+        for (int i = 0; i < tab.tabButtons.Length; i++)
+        {
+            RectTransform rect =
+                tab.tabButtons[i]
+                    .GetComponent<RectTransform>();
+
+            MelonLogger.Msg(
+                $"[AP Journal Layout] Button {i} " +
+                $"Name={tab.tabButtons[i].name} | " +
+                $"Pos={rect.anchoredPosition} | " +
+                $"Size={rect.sizeDelta} | " +
+                $"AnchorMin={rect.anchorMin} | " +
+                $"AnchorMax={rect.anchorMax}"
+            );
+        }
+
+        UI_TabButton apButton =
+            UnityEngine.Object.Instantiate(
+                loreButton,
+                loreButton.transform.parent
+            );
+
+        apButton.name =
+            "ArchipelagoJournalTabButton";
+
+        apButton.transform.SetSiblingIndex(
+            loreButton.transform.GetSiblingIndex() + 1
+        );
+
+        // Change the cloned Lore label to AP.
+        TextMeshProUGUI[] buttonTexts =
+            apButton.GetComponentsInChildren<TextMeshProUGUI>(
+                true
+            );
+
+        foreach (TextMeshProUGUI text in buttonTexts)
+        {
+            if (text != null)
+            {
+                text.text = "AP";
+            }
+        }
+
+        state.ArchipelagoButtonTexts =
+            buttonTexts;
+
+        // The cloned button also clones Lore's existing
+        // click event. Replace the event completely so
+        // this button selects index 4 instead of Lore.
+        Button clickable =
+            apButton.GetComponent<Button>();
+
+        if (clickable == null)
+        {
+            clickable =
+                apButton.GetComponentInChildren<Button>(
+                    true
+                );
+        }
+
+        if (clickable == null)
+        {
+            MelonLogger.Warning(
+                "[AP Journal] Could not find Button " +
+                "component on cloned AP tab."
+            );
+
+            UnityEngine.Object.Destroy(
+                apButton.gameObject
+            );
+
+            return;
+        }
+
+        clickable.onClick =
+            new Button.ButtonClickedEvent();
+
+        clickable.onClick.AddListener(
+            delegate
+            {
+                if (__instance != null)
+                {
+                    __instance.SelectTab(
+                        ArchipelagoTabIndex
+                    );
+                }
+            }
+        );
+
+        // =============================================
+        // Clone the Lore content page
+        // =============================================
+
+        GameObject apContentObject =
+            UnityEngine.Object.Instantiate(
+                __instance
+                    .loreJournalContent
+                    .gameObject,
+                __instance
+                    .loreJournalContent
+                    .transform
+                    .parent
+            );
+
+        apContentObject.name =
+            "ArchipelagoJournalContent";
+
+        apContentObject.transform.SetSiblingIndex(
+            __instance
+                .loreJournalContent
+                .transform
+                .GetSiblingIndex() + 1
+        );
+
+        UI_TabContent apContent =
+            apContentObject.GetComponent<
+                UI_TabContent>();
+
+        if (apContent == null)
+        {
+            MelonLogger.Warning(
+                "[AP Journal] Cloned Lore page did " +
+                "not contain UI_TabContent."
+            );
+
+            UnityEngine.Object.Destroy(
+                apButton.gameObject
+            );
+
+            UnityEngine.Object.Destroy(
+                apContentObject
+            );
+
+            return;
+        }
+
+        UI_JournalContent_Lore clonedLore = apContentObject.GetComponent<UI_JournalContent_Lore>();
+
+        if (clonedLore != null)
+        {
+            // Stop vanilla Lore logic from controlling
+            // the cloned AP page.
+            clonedLore.enabled = false;
+
+            ArchipelagoJournalContentController
+                apController =
+                    apContentObject.AddComponent<
+                        ArchipelagoJournalContentController>();
+
+            apController.Initialize(
+                clonedLore,
+                __instance.itemJournalContent != null
+                    ? __instance.itemJournalContent.transform
+                    : null
+            );
+
+            apController.ConfigureNavigation(clickable);
+        }
+
+        apContentObject.SetActive(false);
+
+        // =============================================
+        // Add index 4 to UI_Tab
+        // =============================================
+
+        UI_TabButton[] newButtons =
+            new UI_TabButton[5];
+
+        UI_TabContent[] newContents =
+            new UI_TabContent[5];
+
+        Array.Copy(
+            state.OriginalButtons,
+            newButtons,
+            4
+        );
+
+        Array.Copy(
+            state.OriginalContents,
+            newContents,
+            4
+        );
+
+        newButtons[ArchipelagoTabIndex] =
+            apButton;
+
+        newContents[ArchipelagoTabIndex] =
+            apContent;
+
+        tab.tabButtons =
+            newButtons;
+
+        tab.tabContents =
+            newContents;
+
+        state.ArchipelagoButton =
+            apButton;
+
+        state.ArchipelagoContent = apContent;
+
+        // Only change the layout after the AP journal
+        // was successfully constructed.
+        if (state.TabLayout != null)
+        {
+            state.TabLayout.spacing = 8f;
+        }
+
+        state.Initialized = true;
+
+        MelonLogger.Msg(
+            "[AP Journal] Added AP journal tab."
+        );
+    }
+
+    private static void RestoreVanillaJournal(
+        UI_JournalPanel panel,
+        ArchipelagoJournalTabState state)
+    {
+        if (panel == null ||
+            panel.tab == null ||
+            state == null)
+        {
+            return;
+        }
+
+        if (state.OriginalButtons != null)
+        {
+            panel.tab.tabButtons =
+                state.OriginalButtons;
+        }
+
+        if (state.OriginalContents != null)
+        {
+            panel.tab.tabContents =
+                state.OriginalContents;
+        }
+
+        if (state.TabLayout != null)
+        {
+            state.TabLayout.spacing =
+                state.OriginalTabSpacing;
+        }
+
+        if (state.ArchipelagoButton != null)
+        {
+            UnityEngine.Object.Destroy(
+                state.ArchipelagoButton.gameObject
+            );
+        }
+
+        if (state.ArchipelagoContent != null)
+        {
+            UnityEngine.Object.Destroy(
+                state.ArchipelagoContent.gameObject
+            );
+        }
+
+        state.ArchipelagoButton = null;
+        state.ArchipelagoContent = null;
+        state.ArchipelagoController = null;
+        state.ArchipelagoButtonTexts = null;
+        state.Initialized = false;
+
+        MelonLogger.Msg(
+            "[AP Journal] Restored vanilla journal."
+        );
+    }
+}
+
+[HarmonyPatch(
+    typeof(BossSpawner),
+    nameof(BossSpawner.ClearBoss)
+)]
+public static class ArchipelagoBossDefeatPatch
+{
+    public static void Postfix(
+        BossSpawner __instance)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        if (__instance == null ||
+            __instance.treeShopReward == null)
+        {
+            return;
+        }
+
+        SephiriaMod.TryCompleteArchipelagoBossDefeat(
+            __instance.treeShopReward.id
+        );
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_TreeShopPanel),
+    nameof(UI_TreeShopPanel.OnOpened)
+)]
+public static class ArchipelagoTreeShopModePatch
+{
+    public static void Postfix(
+        UI_TreeShopPanel __instance)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        ArchipelagoTreeShopModeController
+            controller =
+                __instance.GetComponent<
+                    ArchipelagoTreeShopModeController>();
+
+        if (controller == null)
+        {
+            controller =
+                __instance.gameObject.AddComponent<
+                    ArchipelagoTreeShopModeController>();
+        }
+
+        controller.Initialize(
+            __instance
         );
     }
 }

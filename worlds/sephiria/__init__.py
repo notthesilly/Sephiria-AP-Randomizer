@@ -18,7 +18,9 @@ from .Locations import (
     shrine_check_counts,
     chapter_floor_counts,
     floor_names,
-    costume_mission_location_table
+    costume_mission_location_table,
+    boss_defeat_location_table,
+    boss_defeat_floor_table
 )
 
 
@@ -108,6 +110,31 @@ class SephiriaWorld(World):
 
             menu.locations.append(location)
 
+        # -------------------------------------------------
+        # Boss defeat checks
+        # -------------------------------------------------
+
+        for location_name, location_id in (
+            boss_defeat_location_table.items()
+        ):
+            boss_floor = boss_defeat_floor_table[
+                location_name
+            ]
+
+            # Only include bosses from floors that exist
+            # for the selected goal chapter.
+            if boss_floor > floor_count:
+                continue
+
+            location = SephiriaLocation(
+                self.player,
+                location_name,
+                location_id,
+                menu
+            )
+
+            menu.locations.append(location)
+
     def create_items(self):
         goal_chapter = self.options.goal_chapter.value
 
@@ -126,10 +153,19 @@ class SephiriaWorld(World):
             costume_mission_location_table
         )
 
+        boss_defeat_count = sum(
+            1
+            for location_name in boss_defeat_location_table
+            if boss_defeat_floor_table[
+                location_name
+            ] <= floor_count
+        )
+
         total_location_count = (
             shrine_count +
             sephirite_count +
-            costume_mission_count
+            costume_mission_count +
+            boss_defeat_count
         )
 
         # -------------------------------------------------
