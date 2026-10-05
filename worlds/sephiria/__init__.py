@@ -8,7 +8,13 @@ from .Items import (
     item_table,
     hard_mode_reduction_counts,
     costume_item_to_id,
-    permanent_reward_item_to_tree_shop_id
+    permanent_reward_item_to_tree_shop_id,
+    weapon_unlock_items,
+    weapon_unlock_item_to_weapon_type,
+    mission_unlock_items,
+    talent_point_item_count,
+    destiny_upgrade_item_counts,
+    mission_reward_items
 )
 
 from .Locations import (
@@ -19,6 +25,8 @@ from .Locations import (
     chapter_floor_counts,
     floor_names,
     costume_mission_location_table,
+    destiny_inscription_location_table,
+    mission_location_table,
     boss_defeat_location_table,
     boss_defeat_floor_table
 )
@@ -111,6 +119,38 @@ class SephiriaWorld(World):
             menu.locations.append(location)
 
         # -------------------------------------------------
+        # Destiny Inscription checks
+        # -------------------------------------------------
+
+        for location_name, location_id in (
+            destiny_inscription_location_table.items()
+        ):
+            location = SephiriaLocation(
+                self.player,
+                location_name,
+                location_id,
+                menu
+            )
+
+            menu.locations.append(location)
+
+        # -------------------------------------------------
+        # Mission completion checks
+        # -------------------------------------------------
+
+        for location_name, location_id in (
+            mission_location_table.items()
+        ):
+            location = SephiriaLocation(
+                self.player,
+                location_name,
+                location_id,
+                menu
+            )
+
+            menu.locations.append(location)
+
+        # -------------------------------------------------
         # Boss defeat checks
         # -------------------------------------------------
 
@@ -149,9 +189,9 @@ class SephiriaWorld(World):
             )
         )
 
-        costume_mission_count = len(
-            costume_mission_location_table
-        )
+        costume_mission_count = len(costume_mission_location_table)
+        destiny_inscription_count = len(destiny_inscription_location_table)
+        mission_count = len(mission_location_table)
 
         boss_defeat_count = sum(
             1
@@ -165,6 +205,8 @@ class SephiriaWorld(World):
             shrine_count +
             sephirite_count +
             costume_mission_count +
+            destiny_inscription_count +
+            mission_count +
             boss_defeat_count
         )
 
@@ -241,21 +283,125 @@ class SephiriaWorld(World):
             self.multiworld.itempool.append(item)
 
         # -------------------------------------------------
+        # Weapon unlocks
+        # -------------------------------------------------
+
+        # Every seed gives the player exactly one random
+        # starting weapon from the six AP weapons.
+        self.starting_weapon_item_name = (
+            self.random.choice(weapon_unlock_items)
+        )
+
+        self.starting_weapon_type = (
+            weapon_unlock_item_to_weapon_type[
+                self.starting_weapon_item_name
+            ]
+        )
+
+        # Every weapon except the starting weapon becomes
+        # an Archipelago progression item.
+        for item_name in weapon_unlock_items:
+            if item_name == self.starting_weapon_item_name:
+                continue
+
+            item = SephiriaItem(
+                item_name,
+                ItemClassification.progression,
+                item_table[item_name],
+                self.player
+            )
+
+            self.multiworld.itempool.append(item)
+
+        # -------------------------------------------------
+        # Mission unlocks
+        # -------------------------------------------------
+
+        for item_name in mission_unlock_items:
+            item = SephiriaItem(
+                item_name,
+                ItemClassification.progression,
+                item_table[item_name],
+                self.player
+            )
+
+            self.multiworld.itempool.append(item)
+
+        # -------------------------------------------------
+        # Mission Rewards
+        # -------------------------------------------------
+
+        junk_mission_reward_items = {
+            "Costume Dyeing"
+        }
+
+        for item_name in mission_reward_items:
+            classification = (
+                ItemClassification.filler
+                if item_name in junk_mission_reward_items
+                else ItemClassification.useful
+            )
+
+            self.multiworld.itempool.append(
+                SephiriaItem(
+                    item_name,
+                    classification,
+                    item_table[item_name],
+                    self.player
+                )
+            )
+
+        # -------------------------------------------------
+        # Talent points
+        # -------------------------------------------------
+
+        for _ in range(talent_point_item_count):
+            self.multiworld.itempool.append(
+                SephiriaItem(
+                    "+5 Talent Points",
+                    ItemClassification.useful,
+                    item_table["+5 Talent Points"],
+                    self.player
+                )
+            )
+
+        # -------------------------------------------------
+        # Destiny Inscription upgrades
+        # -------------------------------------------------
+
+        for item_name, item_count in (
+            destiny_upgrade_item_counts.items()
+        ):
+            for _ in range(item_count):
+                self.multiworld.itempool.append(
+                    SephiriaItem(
+                        item_name,
+                        ItemClassification.useful,
+                        item_table[item_name],
+                        self.player
+                    )
+                )
+
+        # -------------------------------------------------
         # Fill remaining locations
         # -------------------------------------------------
 
-        costume_item_count = (
-            len(costume_names) - 1
-        )
-
-        permanent_reward_item_count = len(
-            permanent_reward_item_to_tree_shop_id
-        )
+        costume_item_count = len(costume_names) - 1
+        permanent_reward_item_count = len(permanent_reward_item_to_tree_shop_id)
+        weapon_unlock_item_count = len(weapon_unlock_items) - 1
+        mission_unlock_item_count = len(mission_unlock_items)
+        destiny_upgrade_item_count = sum(destiny_upgrade_item_counts.values())
+        mission_reward_item_count = len(mission_reward_items)
 
         required_item_count = (
             len(reduction_pool) +
             costume_item_count +
-            permanent_reward_item_count
+            permanent_reward_item_count +
+            weapon_unlock_item_count +
+            mission_unlock_item_count +
+            mission_reward_item_count +
+            talent_point_item_count +
+            destiny_upgrade_item_count
         )
 
         if total_location_count < required_item_count:
@@ -296,4 +442,7 @@ class SephiriaWorld(World):
 
             "starting_costume":
                 self.starting_costume_id,
+
+            "starting_weapon":
+                self.starting_weapon_type
         }

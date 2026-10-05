@@ -97,6 +97,72 @@ costume_mission_location_table = {
     "Costume Mission - Wingless Bat": 2018,
 }
 
+destiny_inscription_location_table = {
+    # Main / quest nodes
+    "Destiny Inscription - Tablet": 3001,
+    "Destiny Inscription - Rylie's Gift": 3002,
+    "Destiny Inscription - Heavy Weapon Training": 3003,
+    "Destiny Inscription - Nimble Weapon Training": 3004,
+    "Destiny Inscription - Dice I": 3005,
+    "Destiny Inscription - Magic Workshop": 3006,
+    "Destiny Inscription - Home Repairs": 3007,
+    "Destiny Inscription - Terrain Recovery": 3008,
+    "Destiny Inscription - Dice Acquisition": 3009,
+    "Destiny Inscription - Seed Money": 3010,
+    "Destiny Inscription - Chest of Possibilities": 3011,
+    "Destiny Inscription - Ranged Weapon Training": 3012,
+    "Destiny Inscription - Basement": 3013,
+    "Destiny Inscription - Wishing Fountain": 3014,
+    "Destiny Inscription - Dice Transformation": 3015,
+    "Destiny Inscription - Sharp Weapon Training": 3016,
+    "Destiny Inscription - Hide and Seek": 3017,
+    "Destiny Inscription - Graceful Weapon Training": 3018,
+    "Destiny Inscription - Fruit Skewer": 3019,
+
+    # Upgrade nodes
+    "Destiny Inscription - Talent Point I": 3020,
+    "Destiny Inscription - Talent Point II": 3021,
+    "Destiny Inscription - Level Up Restoration": 3022,
+    "Destiny Inscription - Dice II": 3023,
+    "Destiny Inscription - Expanding Pouch I": 3024,
+    "Destiny Inscription - Expanding Pouch II": 3025,
+    "Destiny Inscription - Extra Experience Drop": 3026,
+    "Destiny Inscription - Talent Point III": 3027,
+    "Destiny Inscription - Talent Point IV": 3028,
+    "Destiny Inscription - MP Regeneration": 3029,
+    "Destiny Inscription - Talent Point V": 3030,
+    "Destiny Inscription - Increase HP I": 3031,
+    "Destiny Inscription - Increase HP II": 3032,
+    "Destiny Inscription - Dice III": 3033,
+    "Destiny Inscription - Side Bag I": 3034,
+    "Destiny Inscription - Side Bag II": 3035,
+
+    # Artifact nodes
+    "Destiny Inscription - Artifact Unlock I": 3036,
+    "Destiny Inscription - Artifact Unlock II": 3037,
+    "Destiny Inscription - Artifact Unlock III": 3038,
+    "Destiny Inscription - Artifact Unlock IV": 3039,
+    "Destiny Inscription - Artifact Unlock V": 3040,
+    "Destiny Inscription - Artifact Unlock VI": 3041,
+    "Destiny Inscription - Bond Artifact Unlock": 3042,
+    "Destiny Inscription - Artifact Unlock VII": 3043,
+    "Destiny Inscription - Artifact Unlock VIII": 3044,
+}
+
+# -------------------------------------------------
+# Mission completion checks
+# -------------------------------------------------
+
+mission_location_table = {
+    "Mission - Home Repairs": 3501,
+    "Mission - Fruit Skewer": 3502,
+    "Mission - Magic Workshop": 3503,
+    "Mission - Basement": 3505,
+    "Mission - Hide and Seek": 3506,
+    "Mission - Rylie's Gift": 3507,
+    "Mission - Terrain Recovery": 3508,
+}
+
 boss_defeat_location_table = {
     "Boss Defeat - Mogdi": 4001,
     "Boss Defeat - Rataka": 4002,
@@ -132,5 +198,7 @@ location_table = {
     **shrine_location_table,
     **sephirite_location_table,
     **costume_mission_location_table,
+    **destiny_inscription_location_table,
+    **mission_location_table,
     **boss_defeat_location_table
 }

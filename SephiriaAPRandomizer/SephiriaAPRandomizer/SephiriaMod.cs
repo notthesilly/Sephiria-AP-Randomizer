@@ -40,12 +40,15 @@ namespace SephiriaAPRandomizer
         public static int RequiredChapterClears { get; private set; }
         public static bool UniqueWeaponsRequired { get; private set; }
         public static string StartingCostumeId { get; private set; }
+        public static EWeaponType? StartingWeaponType { get; private set; }
         public static int CompletedChapterClears { get; private set; }
         public static bool Chapter2EndingReached { get; set; }
         public static bool ArchipelagoGoalPending { get; set; }
 
         private static bool hardModeSyncPending;
         private static bool permanentItemSyncPending;
+        private static bool startingWeaponInitializationPending;
+        private static bool weaponStandSyncPending;
         public static bool IsBuildingArchipelagoCostumePanel;
 
         public const string ArchipelagoShrineMarker = "__SEPHIRIA_ARCHIPELAGO_SHRINE__";
@@ -205,6 +208,69 @@ namespace SephiriaAPRandomizer
                     { 2007, 4008 }, // Kovess
                     { 2008, 4009 }, // Kraz
                     { 2009, 4010 }  // Haz
+                };
+        private static readonly Dictionary<string, string>
+            archipelagoMissionUnlockItems =
+                new Dictionary<string, string>
+                {
+                    {
+                        "Mission Unlock: Home Repairs",
+                        "Destiny_RebuildHome_0"
+                    },
+                    {
+                        "Mission Unlock: Fruit Skewer",
+                        "Destiny_FruitSkewer_0"
+                    },
+                    {
+                        "Mission Unlock: Magic Workshop",
+                        "Destiny_RebuildWorkShop_0"
+                    },
+                    {
+                        "Mission Unlock: Basement",
+                        "Destiny_SalonBasement_0"
+                    },
+                    {
+                        "Mission Unlock: Hide and Seek",
+                        "Destiny_HideAndSeek_0"
+                    },
+                    {
+                        "Mission Unlock: Rylie's Gift",
+                        "Destiny_RyliePotion0"
+                    },
+                    {
+                        "Mission Unlock: Terrain Recovery",
+                        "Destiny_FillTheCliff_0"
+                    }
+                };
+        private static readonly Dictionary<string, long>
+            archipelagoMissionLocations =
+                new Dictionary<string, long>(
+                    StringComparer.Ordinal
+                )
+                {
+                    { "Home Repairs", 3501 },
+                    { "Fruit Skewer", 3502 },
+                    { "Magic Workshop", 3503 },
+
+                    // 3504 intentionally unused.
+
+                    { "Basement", 3505 },
+                    { "Hide and Seek", 3506 },
+                    { "Rylie's Gift", 3507 },
+                    { "Terrain Recovery", 3508 }
+                };
+        private static readonly Dictionary<string, EWeaponType>
+            archipelagoWeaponUnlockItems =
+                new Dictionary<string, EWeaponType>(
+                    StringComparer.Ordinal
+                )
+                {
+                    { "Sword and Shield Unlock", EWeaponType.SwordAndShield },
+                    { "Greatsword Unlock", EWeaponType.GreatSword },
+                    { "Dagger Unlock", EWeaponType.Dagger },
+                    { "Crossbow Unlock", EWeaponType.Crossbow },
+                    { "Staff Unlock", EWeaponType.Staff },
+                    { "Katana Unlock", EWeaponType.Katana }
                 };
         private static readonly HashSet<int> archipelagoPermanentRewardTreeShopIds = new HashSet<int>(archipelagoPermanentRewardItems.Values);
         private static readonly FieldInfo sephiriteRerollButtonGroupField = AccessTools.Field(typeof(UI_SephiriteRewardPanel), "rerollButtonGroup");
@@ -3535,6 +3601,7 @@ namespace SephiriaAPRandomizer
             RequiredChapterClears = 0;
             UniqueWeaponsRequired = false;
             StartingCostumeId = null;
+            StartingWeaponType = null;
             CompletedChapterClears = 0;
 
             Chapter2EndingReached = false;
@@ -3554,6 +3621,8 @@ namespace SephiriaAPRandomizer
 
             hardModeSyncPending = false;
             permanentItemSyncPending = false;
+            startingWeaponInitializationPending = false;
+            weaponStandSyncPending = false;
 
             wasArchipelagoConnected = false;
             disconnectMessageShown = false;
@@ -3630,6 +3699,30 @@ namespace SephiriaAPRandomizer
                 MelonLogger.Msg(
                     $"AP Starting Costume: {StartingCostumeId}"
                 );
+
+                string startingWeaponName =
+                    Convert.ToString(
+                        loginSuccess.SlotData["starting_weapon"]
+                    );
+
+                if (Enum.TryParse(
+                        startingWeaponName,
+                        out EWeaponType startingWeaponType))
+                {
+                    StartingWeaponType = startingWeaponType;
+
+                    MelonLogger.Msg(
+                        $"AP Starting Weapon: {StartingWeaponType}"
+                    );
+                }
+                else
+                {
+                    StartingWeaponType = null;
+
+                    MelonLogger.Error(
+                        $"Invalid AP starting weapon: {startingWeaponName}"
+                    );
+                }
 
                 apSession
                     .DataStorage["sephiria_completed_chapter_clears"]
@@ -3839,13 +3932,41 @@ namespace SephiriaAPRandomizer
                 }
             }
 
-            if (permanentItemSyncPending &&
-                SaveManager.Current != null)
+            if (permanentItemSyncPending && SaveManager.Current != null)
             {
                 permanentItemSyncPending = false;
 
                 ApplyArchipelagoPermanentItemState();
             }
+
+
+            // -------------------------------------------------
+            // Archipelago weapon initialization
+            // -------------------------------------------------
+
+            if (startingWeaponInitializationPending)
+            {
+                if (TryInitializeArchipelagoStartingWeapon())
+                {
+                    startingWeaponInitializationPending = false;
+
+                    weaponStandSyncPending = true;
+                }
+            }
+
+
+            // -------------------------------------------------
+            // Archipelago weapon stands
+            // -------------------------------------------------
+
+            if (weaponStandSyncPending)
+            {
+                if (RefreshArchipelagoWeaponStands())
+                {
+                    weaponStandSyncPending = false;
+                }
+            }
+
 
             if (!hardModeSyncPending)
                 return;
@@ -3981,13 +4102,21 @@ namespace SephiriaAPRandomizer
             if (SaveManager.Current == null)
                 return;
 
-            ArchipelagoSession apSession =
-                session as ArchipelagoSession;
+            ArchipelagoSession apSession = session as ArchipelagoSession;
 
             if (apSession == null)
                 return;
 
+            SynchronizeArchipelagoTalentPoints(apSession);
+            SynchronizeArchipelagoPotionStorage(apSession);
+            SynchronizeArchipelagoStartingPotion(apSession);
+            SynchronizeArchipelagoWillpower(apSession);
+            SynchronizeArchipelagoIngenuity(apSession);
+            SynchronizeArchipelagoCostumeDyeing(apSession);
+            SynchronizeArchipelagoFruitSkewer(apSession);
+            SynchronizeArchipelagoWeapons(apSession);
             SynchronizeArchipelagoPermanentRewards(apSession);
+            SynchronizeArchipelagoMissionUnlocks(apSession);
 
             ArchipelagoPermanentRewardsChanged?.Invoke();
 
@@ -4704,6 +4833,1166 @@ namespace SephiriaAPRandomizer
             return archipelagoPermanentRewardTreeShopIds.Contains(
                 treeShopItemId
             );
+        }
+
+        // Skill Tree Stuff
+
+        private const string ArchipelagoTalentPointItemName = "+5 Talent Points";
+        private const string ArchipelagoPotionStorageItemName = "Potion Storage";
+        private const string ArchipelagoStartingPotionItemName = "Starting Potion";
+        private const string ArchipelagoWillpowerItemName = "Willpower Talent Unlock";
+        private const string ArchipelagoIngenuityItemName = "Ingenuity Talent Unlock";
+        private const string ArchipelagoCostumeDyeingItemName = "Costume Dyeing";
+        private const string ArchipelagoFruitSkewerItemName = "Fruit Skewer Unlock";
+
+        public static int GetArchipelagoTalentPointItemCount()
+        {
+            ArchipelagoSession apSession =
+                session as ArchipelagoSession;
+
+            if (apSession == null)
+                return 0;
+
+            return Math.Min(
+                10,
+                apSession.Items.AllItemsReceived.Count(
+                    item =>
+                        item != null &&
+                        string.Equals(
+                            item.ItemName,
+                            ArchipelagoTalentPointItemName,
+                            StringComparison.Ordinal
+                        )
+                )
+            );
+        }
+
+        public static bool HasArchipelagoTalentAccess()
+        {
+            if (!IsArchipelagoSave)
+            {
+                return SwitchManager.GetDestinySwitch(
+                    "RebuildHomeClear",
+                    fallback: false
+                );
+            }
+
+            return GetArchipelagoTalentPointItemCount() > 0;
+        }
+
+        private static void SynchronizeArchipelagoTalentPoints(
+            ArchipelagoSession apSession)
+        {
+            if (!IsArchipelagoSave ||
+                apSession == null ||
+                CombatManager.Instance == null ||
+                CombatManager.Instance.CurrentPlayer == null)
+            {
+                return;
+            }
+
+            int receivedCount =
+                Math.Min(
+                    10,
+                    apSession.Items.AllItemsReceived.Count(
+                        item =>
+                            item != null &&
+                            string.Equals(
+                                item.ItemName,
+                                ArchipelagoTalentPointItemName,
+                                StringComparison.Ordinal
+                            )
+                    )
+                );
+
+            int desiredMaxPassivePoints =
+                receivedCount * 5;
+
+            PlayerAvatar player =
+                CombatManager.Instance.CurrentPlayer;
+
+            if (player.maxPassivePoint !=
+                desiredMaxPassivePoints)
+            {
+                if (NetworkServer.active)
+                {
+                    player.NetworkmaxPassivePoint =
+                        desiredMaxPassivePoints;
+                }
+                else
+                {
+                    player.maxPassivePoint =
+                        desiredMaxPassivePoints;
+                }
+
+                MelonLogger.Msg(
+                    "[AP Talent] " +
+                    $"{receivedCount}/10 +5 Talent Points received. " +
+                    $"Maximum Talent Points = " +
+                    $"{desiredMaxPassivePoints}."
+                );
+            }
+
+            // Refresh the HUD button immediately if the HUD exists.
+            if (UIManager.Instance != null)
+            {
+                UI_HUDMenu hudMenu =
+                    UIManager.Instance.GetElement<UI_HUDMenu>();
+
+                if (hudMenu != null)
+                {
+                    MethodInfo updatePassiveButton =
+                        AccessTools.Method(
+                            typeof(UI_HUDMenu),
+                            "UpdatePassiveButton"
+                        );
+
+                    updatePassiveButton?.Invoke(
+                        hudMenu,
+                        null
+                    );
+                }
+            }
+        }
+
+        private static void SynchronizeArchipelagoPotionStorage(ArchipelagoSession apSession)
+        {
+            if (!IsArchipelagoSave ||
+                apSession == null)
+            {
+                return;
+            }
+
+            bool received =
+                apSession.Items.AllItemsReceived.Any(
+                    item =>
+                        item != null &&
+                        string.Equals(
+                            item.ItemName,
+                            ArchipelagoPotionStorageItemName,
+                            StringComparison.Ordinal
+                        )
+                );
+
+            if (!received)
+                return;
+
+            // Permanently unlock the Potion Storage feature.
+            if (!SwitchManager.GetDestinySwitch(
+                    "PotionStorageUnlocked",
+                    fallback: false))
+            {
+                SwitchManager.SetDestinySwitch(
+                    "PotionStorageUnlocked",
+                    true,
+                    false
+                );
+
+                SaveManager.Save(
+                    saveCurrent: true,
+                    saveCurrentRun: false
+                );
+
+                MelonLogger.Msg(
+                    "[AP Mission Reward] Potion Storage unlocked."
+                );
+            }
+
+            if (CombatManager.Instance == null ||
+                CombatManager.Instance.CurrentPlayer == null ||
+                CombatManager.Instance.CurrentPlayer.Inventory == null ||
+                !NetworkServer.active)
+            {
+                return;
+            }
+
+            GridInventory inventory =
+                CombatManager.Instance.CurrentPlayer.Inventory;
+
+            // Vanilla Magic Workshop gives 2 potion slots.
+            // Only raise it to 2; never reduce a larger belt.
+            if (inventory.numberOfPotionStorage < 2)
+            {
+                inventory.ServerSetDefaultPotionStorage(2);
+
+                MelonLogger.Msg(
+                    "[AP Mission Reward] Potion Storage capacity set to 2."
+                );
+            }
+        }
+
+        private static void SynchronizeArchipelagoStartingPotion(ArchipelagoSession apSession)
+        {
+            if (!IsArchipelagoSave ||
+                apSession == null)
+            {
+                return;
+            }
+
+            bool received =
+                apSession.Items.AllItemsReceived.Any(
+                    item =>
+                        item != null &&
+                        string.Equals(
+                            item.ItemName,
+                            ArchipelagoStartingPotionItemName,
+                            StringComparison.Ordinal
+                        )
+                );
+
+            if (!received)
+                return;
+
+            bool newlyUnlocked =
+                !SwitchManager.GetDestinySwitch(
+                    "StartingPotionLV1",
+                    fallback: false
+                );
+
+            if (newlyUnlocked)
+            {
+                SwitchManager.SetDestinySwitch(
+                    "StartingPotionLV1",
+                    true,
+                    false
+                );
+
+                SaveManager.Save(
+                    saveCurrent: true,
+                    saveCurrentRun: false
+                );
+
+                MelonLogger.Msg(
+                    "[AP Mission Reward] Starting Potion unlocked."
+                );
+            }
+
+            if (CombatManager.Instance == null ||
+                CombatManager.Instance.CurrentPlayer == null)
+            {
+                return;
+            }
+
+            PlayerAvatar player =
+                CombatManager.Instance.CurrentPlayer;
+
+            PlayerLocalDataStorage data =
+                player.GetComponent<PlayerLocalDataStorage>();
+
+            if (data != null &&
+                NetworkServer.active)
+            {
+                data.UpdateLv1PotionCount();
+            }
+
+            // Give the actual potion immediately the first
+            // time the AP Starting Potion is received.
+            if (newlyUnlocked &&
+                NetworkServer.active &&
+                player.Inventory != null)
+            {
+                ItemMetadata potion =
+                    new ItemMetadata(
+                        ItemDatabase.GenerateInstanceID(
+                            new System.Random()
+                        ),
+                        0,
+                        1
+                    );
+
+                player.Inventory.AddItem(
+                    potion,
+                    0,
+                    notification: false
+                );
+
+                MelonLogger.Msg(
+                    "[AP Mission Reward] Starting Potion added to inventory."
+                );
+            }
+        }
+
+        private static void SynchronizeArchipelagoWillpower(ArchipelagoSession apSession)
+        {
+            if (!IsArchipelagoSave ||
+                apSession == null)
+            {
+                return;
+            }
+
+            bool received =
+                apSession.Items.AllItemsReceived.Any(
+                    item =>
+                        item != null &&
+                        string.Equals(
+                            item.ItemName,
+                            ArchipelagoWillpowerItemName,
+                            StringComparison.Ordinal
+                        )
+                );
+
+            if (!received)
+                return;
+
+            if (SwitchManager.GetDestinySwitch(
+                    "Passive_9_Unlocked",
+                    fallback: false))
+            {
+                return;
+            }
+
+            SwitchManager.SetDestinySwitch(
+                "Passive_9_Unlocked",
+                true,
+                false
+            );
+
+            SaveManager.Save(
+                saveCurrent: true,
+                saveCurrentRun: false
+            );
+
+            MelonLogger.Msg(
+                "[AP Mission Reward] Willpower unlocked."
+            );
+        }
+
+        private static void SynchronizeArchipelagoCostumeDyeing(ArchipelagoSession apSession)
+        {
+            if (!IsArchipelagoSave ||
+                apSession == null)
+            {
+                return;
+            }
+
+            bool received =
+                apSession.Items.AllItemsReceived.Any(
+                    item =>
+                        item != null &&
+                        string.Equals(
+                            item.ItemName,
+                            ArchipelagoCostumeDyeingItemName,
+                            StringComparison.Ordinal
+                        )
+                );
+
+            if (!received)
+                return;
+
+            if (SwitchManager.GetDestinySwitch(
+                    "CostumeDyeing",
+                    fallback: false))
+            {
+                return;
+            }
+
+            SwitchManager.SetDestinySwitch(
+                "CostumeDyeing",
+                true,
+                false
+            );
+
+            SaveManager.Save(
+                saveCurrent: true,
+                saveCurrentRun: false
+            );
+
+            MelonLogger.Msg(
+                "[AP Mission Reward] Costume Dyeing unlocked."
+            );
+        }
+
+        private static void SynchronizeArchipelagoIngenuity(ArchipelagoSession apSession)
+        {
+            if (!IsArchipelagoSave ||
+                apSession == null)
+            {
+                return;
+            }
+
+            bool received =
+                apSession.Items.AllItemsReceived.Any(
+                    item =>
+                        item != null &&
+                        string.Equals(
+                            item.ItemName,
+                            ArchipelagoIngenuityItemName,
+                            StringComparison.Ordinal
+                        )
+                );
+
+            if (!received)
+                return;
+
+            if (SwitchManager.GetDestinySwitch(
+                    "Passive_11_Unlocked",
+                    fallback: false))
+            {
+                return;
+            }
+
+            SwitchManager.SetDestinySwitch(
+                "Passive_11_Unlocked",
+                true,
+                false
+            );
+
+            SaveManager.Save(
+                saveCurrent: true,
+                saveCurrentRun: false
+            );
+
+            MelonLogger.Msg(
+                "[AP Mission Reward] Ingenuity unlocked."
+            );
+        }
+
+        private static void SynchronizeArchipelagoFruitSkewer(ArchipelagoSession apSession)
+        {
+            if (!IsArchipelagoSave ||
+                apSession == null)
+            {
+                return;
+            }
+
+            bool received =
+                apSession.Items.AllItemsReceived.Any(
+                    item =>
+                        item != null &&
+                        string.Equals(
+                            item.ItemName,
+                            ArchipelagoFruitSkewerItemName,
+                            StringComparison.Ordinal
+                        )
+                );
+
+            if (received &&
+                !SwitchManager.GetDestinySwitch(
+                    "FruitSkewerClear",
+                    fallback: false))
+            {
+                SwitchManager.SetDestinySwitch(
+                    "FruitSkewerClear",
+                    true,
+                    false
+                );
+
+                SaveManager.Save(
+                    saveCurrent: true,
+                    saveCurrentRun: false
+                );
+
+                MelonLogger.Msg(
+                    "[AP Mission Reward] Fruit Skewer unlocked."
+                );
+            }
+
+            RefreshArchipelagoFruitSkewerStand();
+        }
+
+        private static void SynchronizeArchipelagoWeapons(ArchipelagoSession apSession)
+        {
+            if (!IsArchipelagoSave ||
+                apSession == null ||
+                SaveManager.Current == null ||
+                !StartingWeaponType.HasValue)
+            {
+                return;
+            }
+
+            bool saveChanged = false;
+
+            // These vanilla weapon tutorials are not needed
+            // for Archipelago weapon progression.
+            if (SaveManager.Current.GetBool(
+                    "RandomWeaponTutorial",
+                    true))
+            {
+                SaveManager.Current.SetBool(
+                    "RandomWeaponTutorial",
+                    false
+                );
+
+                saveChanged = true;
+            }
+
+            if (SaveManager.Current.GetBool(
+                    "TrainingSchoolDoor_Tutorial",
+                    true))
+            {
+                SaveManager.Current.SetBool(
+                    "TrainingSchoolDoor_Tutorial",
+                    false
+                );
+
+                saveChanged = true;
+            }
+
+            HashSet<EWeaponType> ownedWeapons =
+                new HashSet<EWeaponType>();
+
+            // The randomly selected starting weapon is always owned.
+            ownedWeapons.Add(
+                StartingWeaponType.Value
+            );
+
+            // Add every weapon received from Archipelago.
+            foreach (var receivedItem
+                in apSession.Items.AllItemsReceived)
+            {
+                if (receivedItem == null)
+                    continue;
+
+                EWeaponType weaponType;
+
+                if (archipelagoWeaponUnlockItems.TryGetValue(
+                        receivedItem.ItemName,
+                        out weaponType))
+                {
+                    ownedWeapons.Add(
+                        weaponType
+                    );
+                }
+            }
+
+            // Sword & Shield has no vanilla Destiny switch because
+            // vanilla normally grants it unconditionally.
+            bool swordAndShieldUnlocked =
+                ownedWeapons.Contains(
+                    EWeaponType.SwordAndShield
+                );
+
+            bool currentSwordAndShieldUnlocked =
+                SaveManager.Current.GetBool(
+                    "ArchipelagoSwordAndShieldUnlocked",
+                    false
+                );
+
+            if (currentSwordAndShieldUnlocked !=
+                swordAndShieldUnlocked)
+            {
+                SaveManager.Current.SetBool(
+                    "ArchipelagoSwordAndShieldUnlocked",
+                    swordAndShieldUnlocked
+                );
+
+                saveChanged = true;
+            }
+
+            Dictionary<EWeaponType, string> weaponSwitches =
+                new Dictionary<EWeaponType, string>
+                {
+            {
+                EWeaponType.GreatSword,
+                "GreatswordUnlocked"
+            },
+            {
+                EWeaponType.Dagger,
+                "DaggerUnlocked"
+            },
+            {
+                EWeaponType.Crossbow,
+                "CrossbowUnlocked"
+            },
+            {
+                EWeaponType.Katana,
+                "KatanaUnlocked"
+            },
+            {
+                EWeaponType.Staff,
+                "StaffUnlocked"
+            }
+                };
+
+            foreach (KeyValuePair<EWeaponType, string> weapon
+                in weaponSwitches)
+            {
+                bool shouldBeUnlocked =
+                    ownedWeapons.Contains(
+                        weapon.Key
+                    );
+
+                bool currentlyUnlocked =
+                    SwitchManager.GetDestinySwitch(
+                        weapon.Value,
+                        fallback: false
+                    );
+
+                if (currentlyUnlocked ==
+                    shouldBeUnlocked)
+                {
+                    continue;
+                }
+
+                SwitchManager.SetDestinySwitch(
+                    weapon.Value,
+                    shouldBeUnlocked,
+                    false
+                );
+
+                saveChanged = true;
+            }
+
+            if (saveChanged)
+            {
+                SaveManager.Save(
+                    saveCurrent: true,
+                    saveCurrentRun: false
+                );
+            }
+
+            // Refresh the player's runtime weapon list immediately.
+            if (CombatManager.Instance != null &&
+                CombatManager.Instance.CurrentPlayer != null)
+            {
+                PlayerLocalDataStorage data =
+                    CombatManager.Instance.CurrentPlayer
+                        .localDataStorage;
+
+                if (data != null)
+                {
+                    data.CheckWeaponUnlocked();
+                }
+            }
+
+            MelonLogger.Msg(
+                "[AP Weapons] Ownership synchronized. " +
+                $"Starting={StartingWeaponType.Value}, " +
+                $"Owned={ownedWeapons.Count}"
+            );
+
+            startingWeaponInitializationPending = true;
+            weaponStandSyncPending = true;
+        }
+
+        public static void RefreshArchipelagoFruitSkewerStand()
+        {
+            if (!IsArchipelagoSave ||
+                SaveManager.Current == null)
+            {
+                return;
+            }
+
+            bool missionCompleted =
+                SaveManager.Current.GetBool(
+                    "ArchipelagoFruitSkewerMissionComplete",
+                    false
+                );
+
+            // Also recognize saves where the AP location was
+            // already checked before this visibility system existed.
+            ArchipelagoSession apSession =
+                session as ArchipelagoSession;
+
+            long fruitSkewerLocationId;
+
+            if (!missionCompleted &&
+                apSession != null &&
+                archipelagoMissionLocations.TryGetValue(
+                    "Fruit Skewer",
+                    out fruitSkewerLocationId) &&
+                !apSession.Locations.AllMissingLocations.Contains(
+                    fruitSkewerLocationId))
+            {
+                missionCompleted = true;
+            }
+
+            bool fruitSkewerUnlocked =
+                SwitchManager.GetDestinySwitch(
+                    "FruitSkewerClear",
+                    fallback: false
+                );
+
+            // Before the mission is completed, leave vanilla
+            // visibility alone.
+            if (!missionCompleted &&
+                !fruitSkewerUnlocked)
+            {
+                return;
+            }
+
+            bool shouldBeVisible =
+                fruitSkewerUnlocked;
+
+            FruitSkewerSelector[] selectors =
+                Resources.FindObjectsOfTypeAll<FruitSkewerSelector>();
+
+            foreach (FruitSkewerSelector selector
+                in selectors)
+            {
+                if (selector == null ||
+                    selector.gameObject == null ||
+                    !selector.gameObject.scene.IsValid() ||
+                    !selector.gameObject.scene.isLoaded)
+                {
+                    continue;
+                }
+
+                if (selector.gameObject.activeSelf !=
+                    shouldBeVisible)
+                {
+                    selector.gameObject.SetActive(
+                        shouldBeVisible
+                    );
+
+                    MelonLogger.Msg(
+                        "[AP Fruit Skewer] Stand = " +
+                        (shouldBeVisible
+                            ? "VISIBLE."
+                            : "HIDDEN.")
+                    );
+                }
+            }
+        }
+
+        public static bool IsArchipelagoWeaponOwned(EWeaponType weaponType)
+        {
+            if (!IsArchipelagoSave ||
+                SaveManager.Current == null)
+            {
+                return false;
+            }
+
+            switch (weaponType)
+            {
+                case EWeaponType.SwordAndShield:
+                    return SaveManager.Current.GetBool(
+                        "ArchipelagoSwordAndShieldUnlocked",
+                        false
+                    );
+
+                case EWeaponType.GreatSword:
+                    return SwitchManager.GetDestinySwitch(
+                        "GreatswordUnlocked",
+                        false
+                    );
+
+                case EWeaponType.Dagger:
+                    return SwitchManager.GetDestinySwitch(
+                        "DaggerUnlocked",
+                        false
+                    );
+
+                case EWeaponType.Crossbow:
+                    return SwitchManager.GetDestinySwitch(
+                        "CrossbowUnlocked",
+                        false
+                    );
+
+                case EWeaponType.Staff:
+                    return SwitchManager.GetDestinySwitch(
+                        "StaffUnlocked",
+                        false
+                    );
+
+                case EWeaponType.Katana:
+                    return SwitchManager.GetDestinySwitch(
+                        "KatanaUnlocked",
+                        false
+                    );
+
+                default:
+                    return false;
+            }
+        }
+
+        private static bool TryGetArchipelagoWeaponEntity(
+            EWeaponType weaponType,
+            out WeaponEntity weaponEntity)
+        {
+            weaponEntity = null;
+
+            IEnumerable<WeaponEntity> weapons =
+                WeaponDatabase.GetDefaultWeapons();
+
+            if (weapons == null)
+                return false;
+
+            foreach (WeaponEntity weapon in weapons)
+            {
+                if (weapon == null ||
+                    weapon.mainWeaponPrefab == null)
+                {
+                    continue;
+                }
+
+                WeaponSimple weaponSimple =
+                    weapon.mainWeaponPrefab
+                        .GetComponent<WeaponSimple>();
+
+                if (weaponSimple == null)
+                    continue;
+
+                if (weaponSimple.weaponType != weaponType)
+                    continue;
+
+                weaponEntity = weapon;
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool TryInitializeArchipelagoStartingWeapon()
+        {
+            if (!IsArchipelagoSave ||
+                SaveManager.Current == null ||
+                !StartingWeaponType.HasValue)
+            {
+                return false;
+            }
+
+            // This AP save has already had its randomized
+            // starting weapon applied. From this point on,
+            // Sephiria's normal weapon selection should win.
+            if (SaveManager.Current.GetBool(
+                    "ArchipelagoStartingWeaponInitialized",
+                    false))
+            {
+                return true;
+            }
+
+            if (CombatManager.Instance == null ||
+                CombatManager.Instance.CurrentPlayer == null)
+            {
+                return false;
+            }
+
+            PlayerAvatar player = CombatManager.Instance.CurrentPlayer;
+
+            WeaponControllerSimple weaponController =player.GetComponent<WeaponControllerSimple>();
+
+            PlayerLocalDataStorage localDataStorage = player.GetComponent<PlayerLocalDataStorage>();
+
+            if (weaponController == null ||
+                localDataStorage == null)
+            {
+                return false;
+            }
+
+            // Wait until Sephiria has completely finished equipping
+            // its vanilla starting weapon.
+            //
+            // WeaponSimple.Initialize() assigns:
+            //     Networkowner.currentWeapon = this;
+            //
+            // If we replace the weapon before that happens, the
+            // vanilla weapon can finish initializing afterward and
+            // overwrite the AP starting weapon.
+            if (weaponController.currentWeapon == null)
+            {
+                return false;
+            }
+
+            WeaponEntity startingWeapon;
+
+            if (!TryGetArchipelagoWeaponEntity(
+                    StartingWeaponType.Value,
+                    out startingWeapon))
+            {
+                MelonLogger.Warning(
+                    $"[AP Weapons] Could not find WeaponEntity for " +
+                    $"{StartingWeaponType.Value}."
+                );
+
+                return false;
+            }
+
+            // Only perform another equip if Sephiria spawned us
+            // with a different weapon.
+            if (weaponController.currentWeapon.weaponType !=
+                StartingWeaponType.Value)
+            {
+                MelonLogger.Msg(
+                    $"[AP Weapons] Replacing vanilla starting weapon " +
+                    $"{weaponController.currentWeapon.weaponType} with " +
+                    $"{StartingWeaponType.Value}."
+                );
+
+                weaponController.EquipWeapon(
+                    fromTownObject: false,
+                    startingWeapon.id
+                );
+            }
+
+            localDataStorage.NetworkdefaultWeapon =
+                startingWeapon.id;
+
+            SaveManager.Current.SetInt(
+                "StartingWeaponID",
+                startingWeapon.id
+            );
+
+            // IMPORTANT:
+            // Once this is true, we never force the AP starter
+            // again. The player may freely choose another owned
+            // weapon from its stand.
+            SaveManager.Current.SetBool(
+                "ArchipelagoStartingWeaponInitialized",
+                true
+            );
+
+            SaveManager.Save(
+                saveCurrent: true,
+                saveCurrentRun: false
+            );
+
+            MelonLogger.Msg(
+                $"[AP Weapons] Initial starting weapon equipped: " +
+                $"{StartingWeaponType.Value} " +
+                $"(Weapon ID {startingWeapon.id})."
+            );
+
+            return true;
+        }
+
+        private static bool RefreshArchipelagoWeaponStands()
+        {
+            if (!IsArchipelagoSave ||
+                SaveManager.Current == null)
+            {
+                return false;
+            }
+
+            TownWeaponStand[] stands =
+                Resources.FindObjectsOfTypeAll<TownWeaponStand>();
+
+            if (stands == null ||
+                stands.Length == 0)
+            {
+                return false;
+            }
+
+            int recognizedStandCount = 0;
+
+            foreach (TownWeaponStand stand in stands)
+            {
+                if (stand == null ||
+                    stand.gameObject == null ||
+                    !stand.gameObject.scene.IsValid() ||
+                    !stand.gameObject.scene.isLoaded ||
+                    stand.weapon == null ||
+                    stand.weapon.mainWeaponPrefab == null)
+                {
+                    continue;
+                }
+
+                WeaponSimple weaponSimple =
+                    stand.weapon.mainWeaponPrefab
+                        .GetComponent<WeaponSimple>();
+
+                if (weaponSimple == null)
+                    continue;
+
+                EWeaponType weaponType =
+                    weaponSimple.weaponType;
+
+                switch (weaponType)
+                {
+                    case EWeaponType.SwordAndShield:
+                    case EWeaponType.GreatSword:
+                    case EWeaponType.Dagger:
+                    case EWeaponType.Crossbow:
+                    case EWeaponType.Staff:
+                    case EWeaponType.Katana:
+                        break;
+
+                    default:
+                        continue;
+                }
+
+                recognizedStandCount++;
+
+                bool shouldBeVisible =
+                    IsArchipelagoWeaponOwned(
+                        weaponType
+                    );
+
+                if (stand.gameObject.activeSelf !=
+                    shouldBeVisible)
+                {
+                    stand.gameObject.SetActive(
+                        shouldBeVisible
+                    );
+
+                    MelonLogger.Msg(
+                        $"[AP Weapons] {weaponType} stand = " +
+                        $"{(shouldBeVisible ? "VISIBLE" : "HIDDEN")}."
+                    );
+                }
+            }
+
+            return recognizedStandCount > 0;
+        }
+
+        public static void QueueArchipelagoWeaponStandSync()
+        {
+            if (!IsArchipelagoSave)
+                return;
+
+            weaponStandSyncPending = true;
+        }
+
+        public static bool GetArchipelagoPassiveAccess(
+            string switchName,
+            bool fallback)
+        {
+            if (IsArchipelagoSave &&
+                string.Equals(
+                    switchName,
+                    "RebuildHomeClear",
+                    StringComparison.Ordinal
+                ))
+            {
+                return HasArchipelagoTalentAccess();
+            }
+
+            return SwitchManager.GetDestinySwitch(
+                switchName,
+                fallback
+            );
+        }
+
+        public static IEnumerable<CodeInstruction>
+            ReplacePassiveAccessCheck(
+                IEnumerable<CodeInstruction> instructions)
+        {
+            MethodInfo originalMethod =
+                AccessTools.Method(
+                    typeof(SwitchManager),
+                    nameof(SwitchManager.GetDestinySwitch),
+                    new Type[]
+                    {
+                typeof(string),
+                typeof(bool)
+                    }
+                );
+
+            MethodInfo replacementMethod =
+                AccessTools.Method(
+                    typeof(SephiriaMod),
+                    nameof(GetArchipelagoPassiveAccess)
+                );
+
+            foreach (CodeInstruction instruction
+                in instructions)
+            {
+                MethodInfo calledMethod =
+                    instruction.operand as MethodInfo;
+
+                if (calledMethod == originalMethod)
+                {
+                    instruction.operand =
+                        replacementMethod;
+                }
+
+                yield return instruction;
+            }
+        }
+
+        private static void SynchronizeArchipelagoMissionUnlocks(
+            ArchipelagoSession apSession)
+        {
+            if (!IsArchipelagoSave ||
+                apSession == null)
+            {
+                return;
+            }
+
+            foreach (KeyValuePair<string, string> mission
+                in archipelagoMissionUnlockItems)
+            {
+                string apItemName = mission.Key;
+                string questId = mission.Value;
+
+                bool received =
+                    apSession.Items.AllItemsReceived.Any(
+                        item =>
+                            item != null &&
+                            string.Equals(
+                                item.ItemName,
+                                apItemName,
+                                StringComparison.Ordinal
+                            )
+                    );
+
+                if (!received)
+                    continue;
+
+                QuestDatabase.SetDestinyQuestAcceptable(
+                    questId,
+                    false
+                );
+            }
+        }
+
+        public static bool TryCompleteArchipelagoMission(string missionName)
+        {
+            if (!IsArchipelagoSave)
+                return false;
+
+            long locationId;
+
+            if (!archipelagoMissionLocations.TryGetValue(
+                    missionName,
+                    out locationId))
+            {
+                MelonLogger.Warning(
+                    $"[AP Mission] Unknown mission: {missionName}"
+                );
+
+                return false;
+            }
+
+            ArchipelagoSession apSession =
+                session as ArchipelagoSession;
+
+            if (apSession == null ||
+                !apSession.Socket.Connected)
+            {
+                MelonLogger.Warning(
+                    $"[AP Mission] Cannot check {missionName}: " +
+                    "Archipelago is disconnected."
+                );
+
+                return false;
+            }
+
+            // Already checked.
+            if (!apSession.Locations
+                    .AllMissingLocations
+                    .Contains(locationId))
+            {
+                return true;
+            }
+
+            string locationName =
+                apSession.Locations.GetLocationNameFromId(
+                    locationId,
+                    "Sephiria"
+                );
+
+            try
+            {
+                apSession.Locations.CompleteLocationChecks(
+                    locationId
+                );
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Error(
+                    $"[AP Mission] Failed to check " +
+                    $"{locationName}: {ex.Message}"
+                );
+
+                return false;
+            }
+
+            MelonLogger.Msg(
+                $"[AP Mission] Checked {locationName}."
+            );
+
+            return true;
         }
 
         private static void RefreshArchipelagoDeclineRuntimeStatus()
@@ -7596,7 +8885,10 @@ public class ArchipelagoTreeShopModeController : MonoBehaviour
         ReceivedUpgrades
     }
 
-    public static TreeMode CurrentMode { get; private set; } = TreeMode.ArchipelagoTree;
+    public static TreeMode CurrentMode { get; private set; }
+        = TreeMode.ArchipelagoTree;
+
+    public static bool IsTreeShopOpen { get; private set; }
 
     private UI_TreeShopPanel panel;
 
@@ -7605,8 +8897,22 @@ public class ArchipelagoTreeShopModeController : MonoBehaviour
         UI_TreeShopPanel treeShopPanel)
     {
         panel = treeShopPanel;
+        IsTreeShopOpen = true;
+    }
 
-        ShowArchipelagoTree();
+
+    public static void PrepareForOpen()
+    {
+        CurrentMode =
+            TreeMode.ArchipelagoTree;
+
+        IsTreeShopOpen = true;
+    }
+
+
+    public static void MarkClosed()
+    {
+        IsTreeShopOpen = false;
     }
 
 
@@ -7701,6 +9007,49 @@ public class ArchipelagoTreeShopModeController : MonoBehaviour
         MelonLogger.Msg(
             "[AP Tree] Mode: Received Upgrades"
         );
+    }
+}
+
+public static class ArchipelagoTreeShopSaveRedirect
+{
+    public static string RedirectKey(
+        string key)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return key;
+
+        if (!ArchipelagoTreeShopModeController
+            .IsTreeShopOpen)
+        {
+            return key;
+        }
+
+        if (ArchipelagoTreeShopModeController
+            .CurrentMode !=
+            ArchipelagoTreeShopModeController
+                .TreeMode.ArchipelagoTree)
+        {
+            return key;
+        }
+
+        if (string.IsNullOrEmpty(key))
+            return key;
+
+        if (!key.StartsWith(
+            "TreeShopItem_"))
+        {
+            return key;
+        }
+
+        // Root's Retreat belongs to our Hard Mode
+        // system, not the randomized AP tree.
+        if (key.StartsWith(
+            "TreeShopItem_3000_"))
+        {
+            return key;
+        }
+
+        return "AP" + key;
     }
 }
 
@@ -8874,6 +10223,16 @@ public static class NewGamePatch
 
         SaveManager.Current.SetBool(
             "SapphireTutorial",
+            false
+        );
+
+        SaveManager.Current.SetBool(
+            "MagicTutorial_New",
+            false
+        );
+
+        SaveManager.Current.SetBool(
+            "CostumeSkinTutorial",
             false
         );
 
@@ -12779,6 +14138,16 @@ public static class ArchipelagoBossDefeatPatch
 )]
 public static class ArchipelagoTreeShopModePatch
 {
+    public static void Prefix()
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        ArchipelagoTreeShopModeController
+            .PrepareForOpen();
+    }
+
+
     public static void Postfix(
         UI_TreeShopPanel __instance)
     {
@@ -12800,5 +14169,1117 @@ public static class ArchipelagoTreeShopModePatch
         controller.Initialize(
             __instance
         );
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_TreeShopPanel),
+    nameof(UI_TreeShopPanel.OnClosed)
+)]
+public static class ArchipelagoTreeShopClosedPatch
+{
+    public static void Postfix()
+    {
+        ArchipelagoTreeShopModeController
+            .MarkClosed();
+    }
+}
+
+[HarmonyPatch(
+    typeof(SaveData),
+    nameof(SaveData.GetInt),
+    new Type[]
+    {
+        typeof(string),
+        typeof(int)
+    }
+)]
+public static class ArchipelagoTreeShopGetIntPatch
+{
+    public static void Prefix(
+        ref string key)
+    {
+        key =
+            ArchipelagoTreeShopSaveRedirect
+                .RedirectKey(key);
+    }
+}
+
+[HarmonyPatch(
+    typeof(SaveData),
+    nameof(SaveData.SetInt),
+    new Type[]
+    {
+        typeof(string),
+        typeof(int)
+    }
+)]
+public static class ArchipelagoTreeShopSetIntPatch
+{
+    public static void Prefix(
+        ref string key)
+    {
+        key =
+            ArchipelagoTreeShopSaveRedirect
+                .RedirectKey(key);
+    }
+}
+
+[HarmonyPatch(
+    typeof(TreeShopItemStorage),
+    nameof(TreeShopItemStorage.BuyItem)
+)]
+public static class ArchipelagoTreeShopBuyItemPatch
+{
+    public static bool Prefix(int id)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        if (!ArchipelagoTreeShopModeController.IsTreeShopOpen)
+            return true;
+
+        if (ArchipelagoTreeShopModeController.CurrentMode !=
+            ArchipelagoTreeShopModeController.TreeMode.ArchipelagoTree)
+        {
+            return true;
+        }
+
+        // Root's Retreat is handled separately.
+        if (id == 3000)
+            return true;
+
+        TreeShopItemEntity shopItem =
+            TreeShopItemDatabase.FindById(id);
+
+        if (shopItem == null)
+        {
+            MelonLogger.Warning(
+                $"[AP Tree] Could not find TreeShop item {id}."
+            );
+
+            return false;
+        }
+
+        int currentCount =
+            SaveManager.Current.GetInt(
+                $"TreeShopItem_{id}_PurchasedCount",
+                0
+            );
+
+        if (currentCount >= shopItem.maxQuantity)
+            return false;
+
+        int newCount = currentCount + 1;
+
+        SaveManager.Current.SetInt(
+            $"TreeShopItem_{id}_PurchasedCount",
+            newCount
+        );
+
+        SaveManager.Save(
+            saveCurrent: true,
+            saveCurrentRun: false
+        );
+
+        MelonLogger.Msg(
+            $"[AP Tree] Purchased node {id}: " +
+            $"{newCount}/{shopItem.maxQuantity}"
+        );
+
+        if (newCount >= shopItem.maxQuantity)
+        {
+            MelonLogger.Msg(
+                $"[AP Tree] Node {id} fully purchased. " +
+                $"This will become its AP location check."
+            );
+        }
+
+        // CRITICAL:
+        // Do not run vanilla BuyItem().
+        // That would actually grant the Sephiria upgrade.
+        return false;
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_TreeShopPanel),
+    nameof(UI_TreeShopPanel.OnOpened)
+)]
+public static class ArchipelagoTreeRewardDebugPatch
+{
+    private static bool dumped = false;
+
+    public static void Postfix()
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        if (dumped)
+            return;
+
+        dumped = true;
+
+        MelonLogger.Msg(
+            "========== AP TREE REWARD DUMP =========="
+        );
+
+        foreach (TreeShopItemEntity item
+            in TreeShopItemDatabase.GetAll())
+        {
+            if (item == null)
+                continue;
+
+            // Exclude things we already know are not
+            // normal Destiny Inscription rewards.
+            if (item.id >= 2000)
+                continue;
+
+            MelonLogger.Msg(
+                $"[AP Tree Reward] " +
+                $"ID={item.id} | " +
+                $"Name={item.aName} | " +
+                $"Behaviour={item.behaviour} | " +
+                $"Max={item.maxQuantity}"
+            );
+
+            if (item.statusByLevel != null)
+            {
+                for (int i = 0;
+                    i < item.statusByLevel.Length;
+                    i++)
+                {
+                    MelonLogger.Msg(
+                        $"    Status[{i}] = " +
+                        $"{item.statusByLevel[i]}"
+                    );
+                }
+            }
+
+            if (item.items != null)
+            {
+                for (int i = 0;
+                    i < item.items.Length;
+                    i++)
+                {
+                    ItemEntity reward =
+                        item.items[i];
+
+                    if (reward == null)
+                        continue;
+
+                    MelonLogger.Msg(
+                        $"    Item[{i}] = " +
+                        $"{reward.name}"
+                    );
+                }
+            }
+
+            if (item.questEntity != null)
+            {
+                MelonLogger.Msg(
+                    $"    Quest = " +
+                    $"{item.questEntity.name}"
+                );
+            }
+
+            if (!string.IsNullOrEmpty(
+                item.destinyChangeID))
+            {
+                MelonLogger.Msg(
+                    $"    DestinyChange = " +
+                    $"{item.destinyChangeID}"
+                );
+            }
+        }
+
+        MelonLogger.Msg(
+            "======== END AP TREE REWARD DUMP ========"
+        );
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_HUDMenu),
+    "UpdatePassiveButton"
+)]
+public static class ArchipelagoPassiveButtonPatch
+{
+    public static IEnumerable<CodeInstruction>
+        Transpiler(
+            IEnumerable<CodeInstruction> instructions)
+    {
+        return SephiriaMod.ReplacePassiveAccessCheck(
+            instructions
+        );
+    }
+}
+
+[HarmonyPatch(
+    typeof(PlayerInputController),
+    nameof(PlayerInputController.HandleOpenPassivePanel)
+)]
+public static class ArchipelagoPassiveInputPatch
+{
+    public static IEnumerable<CodeInstruction>
+        Transpiler(
+            IEnumerable<CodeInstruction> instructions)
+    {
+        return SephiriaMod.ReplacePassiveAccessCheck(
+            instructions
+        );
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_PassivePanel),
+    nameof(UI_PassivePanel.OnOpened)
+)]
+public static class ArchipelagoTalentTutorialPatch
+{
+    public static void Prefix()
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        SaveManager.Current.SetBool(
+            "TalentTutorial2",
+            false
+        );
+    }
+}
+
+[HarmonyPatch(
+    typeof(AbilitySelector),
+    "HandleInteraction"
+)]
+public static class ArchipelagoTalentMirrorPatch
+{
+    public static bool Prefix()
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        return SephiriaMod.HasArchipelagoTalentAccess();
+    }
+}
+
+[HarmonyPatch(
+    typeof(Interactable),
+    nameof(Interactable.GetInteractionString)
+)]
+public static class ArchipelagoTalentMirrorTextPatch
+{
+    public static void Postfix(
+        Interactable __instance,
+        ref string __result)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        // Only modify Talent mirror interactables.
+        if (__instance.GetComponent<AbilitySelector>() == null)
+            return;
+
+        if (SephiriaMod.HasArchipelagoTalentAccess())
+            return;
+
+        __result = "LOCKED";
+    }
+}
+
+[HarmonyPatch(
+    typeof(SwitchManager),
+    nameof(SwitchManager.SetDestinySwitch)
+)]
+public static class ArchipelagoHomeRepairsMessagePatch
+{
+    public static void Prefix(
+        string destinySwitchName,
+        bool value,
+        ref bool inscriptionNotify,
+        out bool __state)
+    {
+        __state =
+            SephiriaMod.IsArchipelagoSave &&
+            destinySwitchName == "RebuildHomeClear" &&
+            value &&
+            inscriptionNotify;
+
+        if (__state)
+        {
+            // Prevent the vanilla notification from appearing.
+            // The switch itself will still be set normally.
+            inscriptionNotify = false;
+        }
+    }
+
+    public static void Postfix(bool __state)
+    {
+        if (!__state)
+            return;
+
+        UIManager.Instance
+            .GetElement<UI_DestinyChangeHUD>()
+            .Open("Your house has been repaired.");
+    }
+}
+
+[HarmonyPatch(
+    typeof(QuestController),
+    "Reward",
+    new Type[] { typeof(QuestReward[]) }
+)]
+public static class ArchipelagoHomeRepairsCompletionPatch
+{
+    public static void Postfix(QuestReward[] __0)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        if (__0 == null)
+            return;
+
+        foreach (QuestReward reward in __0)
+        {
+            if (reward == null)
+                continue;
+
+            if (reward.type !=
+                QuestReward.Type.DestinyChange)
+            {
+                continue;
+            }
+
+            if (reward.destinyChangeKey !=
+                "RebuildHomeClear")
+            {
+                continue;
+            }
+
+            if (!reward.destinyChangeValue)
+                continue;
+
+            SephiriaMod.TryCompleteArchipelagoMission(
+                "Home Repairs"
+            );
+
+            return;
+        }
+    }
+}
+
+[HarmonyPatch(
+    typeof(QuestController),
+    "Reward",
+    new Type[] { typeof(QuestReward[]) }
+)]
+public static class ArchipelagoMagicWorkshopCompletionPatch
+{
+    public static void Prefix(
+        ref QuestReward[] __0,
+        out bool __state)
+    {
+        __state = false;
+
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        if (__0 == null)
+            return;
+
+        __state = __0.Any(
+            reward =>
+                reward != null &&
+                reward.type ==
+                    QuestReward.Type.PotionStorage
+        );
+
+        if (!__state)
+            return;
+
+        // Do not grant the vanilla Potion Storage reward.
+        // Potion Storage is an Archipelago item instead.
+        __0 = __0
+            .Where(
+                reward =>
+                    reward == null ||
+                    reward.type !=
+                        QuestReward.Type.PotionStorage
+            )
+            .ToArray();
+    }
+
+    public static void Postfix(bool __state)
+    {
+        if (!__state)
+            return;
+
+        SephiriaMod.TryCompleteArchipelagoMission(
+            "Magic Workshop"
+        );
+    }
+}
+
+[HarmonyPatch(
+    typeof(QuestController),
+    "Reward",
+    new Type[] { typeof(QuestReward[]) }
+)]
+public static class ArchipelagoRyliesGiftCompletionPatch
+{
+    public static void Prefix(
+        ref QuestReward[] __0,
+        out bool __state)
+    {
+        __state = false;
+
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        if (__0 == null)
+            return;
+
+        __state = __0.Any(
+            reward =>
+                reward != null &&
+                reward.type ==
+                    QuestReward.Type.DestinyChange &&
+                string.Equals(
+                    reward.destinyChangeKey,
+                    "StartingPotionLV1",
+                    StringComparison.Ordinal
+                ) &&
+                reward.destinyChangeValue
+        );
+
+        if (!__state)
+            return;
+
+        // Starting Potion comes from Archipelago instead.
+        __0 = __0
+            .Where(
+                reward =>
+                    reward == null ||
+                    reward.type !=
+                        QuestReward.Type.DestinyChange ||
+                    !string.Equals(
+                        reward.destinyChangeKey,
+                        "StartingPotionLV1",
+                        StringComparison.Ordinal
+                    )
+            )
+            .ToArray();
+    }
+
+    public static void Postfix(bool __state)
+    {
+        if (!__state)
+            return;
+
+        SephiriaMod.TryCompleteArchipelagoMission(
+            "Rylie's Gift"
+        );
+    }
+}
+
+[HarmonyPatch(
+    typeof(FunctionNode_CreateItemOnGround),
+    nameof(FunctionNode_CreateItemOnGround.DoSomething)
+)]
+public static class ArchipelagoRyliePotionDropPatch
+{
+    public static bool Prefix(
+        FunctionNode_CreateItemOnGround __instance,
+        ref IEnumerator __result)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        // Rylie's physical reward is item ID 0.
+        if (__instance.itemEntity == null ||
+            __instance.itemEntity.id != 0)
+        {
+            return true;
+        }
+
+        if (CombatManager.Instance == null ||
+            CombatManager.Instance.CurrentPlayer == null)
+        {
+            return true;
+        }
+
+        QuestController questController =
+            CombatManager.Instance.CurrentPlayer
+                .GetComponent<QuestController>();
+
+        if (questController == null)
+            return true;
+
+        bool rylieQuestActive =
+            questController.IsDoingQuest(
+                "Destiny_RyliePotion0") ||
+            questController.IsDoingQuest(
+                "Destiny_RyliePotion0-1") ||
+            questController.IsDoingQuest(
+                "Destiny_RyliePotion0-2") ||
+            questController.IsDoingQuest(
+                "Destiny_RyliePotion0-3");
+
+        if (!rylieQuestActive)
+            return true;
+
+        __result = SkipPotionDrop();
+
+        MelonLogger.Msg(
+            "[AP Mission] Suppressed Rylie's vanilla potion drop."
+        );
+
+        return false;
+    }
+
+    private static IEnumerator SkipPotionDrop()
+    {
+        yield return null;
+    }
+}
+
+[HarmonyPatch(
+    typeof(QuestController),
+    "Reward",
+    new Type[] { typeof(QuestReward[]) }
+)]
+public static class ArchipelagoTerrainRecoveryCompletionPatch
+{
+    public static void Prefix(
+        ref QuestReward[] __0,
+        out bool __state)
+    {
+        __state = false;
+
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        if (__0 == null)
+            return;
+
+        bool hasTerrainRepair =
+            __0.Any(
+                reward =>
+                    reward != null &&
+                    reward.type ==
+                        QuestReward.Type.DestinyChange &&
+                    string.Equals(
+                        reward.destinyChangeKey,
+                        "FillTheCliffClear",
+                        StringComparison.Ordinal
+                    ) &&
+                    reward.destinyChangeValue
+            );
+
+        bool hasWillpowerUnlock =
+            __0.Any(
+                reward =>
+                    reward != null &&
+                    reward.type ==
+                        QuestReward.Type.DestinyChange &&
+                    string.Equals(
+                        reward.destinyChangeKey,
+                        "Passive_9_Unlocked",
+                        StringComparison.Ordinal
+                    ) &&
+                    reward.destinyChangeValue
+            );
+
+        // This exact combination identifies the final
+        // Terrain Recovery reward.
+        __state =
+            hasTerrainRepair &&
+            hasWillpowerUnlock;
+
+        if (!__state)
+            return;
+
+        // Keep FillTheCliffClear so the terrain remains
+        // physically repaired.
+        //
+        // Remove only Passive_9_Unlocked because
+        // Willpower is now an Archipelago item.
+        __0 = __0
+            .Where(
+                reward =>
+                    reward == null ||
+                    reward.type !=
+                        QuestReward.Type.DestinyChange ||
+                    !string.Equals(
+                        reward.destinyChangeKey,
+                        "Passive_9_Unlocked",
+                        StringComparison.Ordinal
+                    )
+            )
+            .ToArray();
+    }
+
+    public static void Postfix(bool __state)
+    {
+        if (!__state)
+            return;
+
+        SephiriaMod.TryCompleteArchipelagoMission(
+            "Terrain Recovery"
+        );
+    }
+}
+
+[HarmonyPatch(
+    typeof(QuestController),
+    "Reward",
+    new Type[] { typeof(QuestReward[]) }
+)]
+public static class ArchipelagoBasementCompletionPatch
+{
+    public static void Prefix(
+        ref QuestReward[] __0,
+        out bool __state)
+    {
+        __state = false;
+
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        if (__0 == null)
+            return;
+
+        __state =
+            __0.Any(
+                reward =>
+                    reward != null &&
+                    reward.type ==
+                        QuestReward.Type.DestinyChange &&
+                    string.Equals(
+                        reward.destinyChangeKey,
+                        "CostumeDyeing",
+                        StringComparison.Ordinal
+                    ) &&
+                    reward.destinyChangeValue
+            );
+
+        if (!__state)
+            return;
+
+        // Costume Dyeing comes from Archipelago instead.
+        __0 = __0
+            .Where(
+                reward =>
+                    reward == null ||
+                    reward.type !=
+                        QuestReward.Type.DestinyChange ||
+                    !string.Equals(
+                        reward.destinyChangeKey,
+                        "CostumeDyeing",
+                        StringComparison.Ordinal
+                    )
+            )
+            .ToArray();
+    }
+
+    public static void Postfix(bool __state)
+    {
+        if (!__state)
+            return;
+
+        SephiriaMod.TryCompleteArchipelagoMission(
+            "Basement"
+        );
+    }
+}
+
+[HarmonyPatch(
+    typeof(QuestController),
+    "Reward",
+    new Type[] { typeof(QuestReward[]) }
+)]
+public static class ArchipelagoHideAndSeekCompletionPatch
+{
+    public static void Prefix(
+        ref QuestReward[] __0,
+        out bool __state)
+    {
+        __state = false;
+
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        if (__0 == null)
+            return;
+
+        __state =
+            __0.Any(
+                reward =>
+                    reward != null &&
+                    reward.type ==
+                        QuestReward.Type.DestinyChange &&
+                    string.Equals(
+                        reward.destinyChangeKey,
+                        "Passive_11_Unlocked",
+                        StringComparison.Ordinal
+                    ) &&
+                    reward.destinyChangeValue
+            );
+
+        if (!__state)
+            return;
+
+        // Ingenuity comes from Archipelago instead.
+        __0 = __0
+            .Where(
+                reward =>
+                    reward == null ||
+                    reward.type !=
+                        QuestReward.Type.DestinyChange ||
+                    !string.Equals(
+                        reward.destinyChangeKey,
+                        "Passive_11_Unlocked",
+                        StringComparison.Ordinal
+                    )
+            )
+            .ToArray();
+    }
+
+    public static void Postfix(bool __state)
+    {
+        if (!__state)
+            return;
+
+        SephiriaMod.TryCompleteArchipelagoMission(
+            "Hide and Seek"
+        );
+    }
+}
+
+[HarmonyPatch(
+    typeof(QuestController),
+    "Reward",
+    new Type[] { typeof(QuestReward[]) }
+)]
+public static class ArchipelagoFruitSkewerCompletionPatch
+{
+    public static void Prefix(
+        ref QuestReward[] __0,
+        out bool __state)
+    {
+        __state = false;
+
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        if (__0 == null)
+            return;
+
+        __state =
+            __0.Any(
+                reward =>
+                    reward != null &&
+                    reward.type ==
+                        QuestReward.Type.DestinyChange &&
+                    string.Equals(
+                        reward.destinyChangeKey,
+                        "FruitSkewerClear",
+                        StringComparison.Ordinal
+                    ) &&
+                    reward.destinyChangeValue
+            );
+
+        if (!__state)
+            return;
+
+        // Fruit Skewer functionality comes from
+        // the Archipelago item instead.
+        __0 = __0
+            .Where(
+                reward =>
+                    reward == null ||
+                    reward.type !=
+                        QuestReward.Type.DestinyChange ||
+                    !string.Equals(
+                        reward.destinyChangeKey,
+                        "FruitSkewerClear",
+                        StringComparison.Ordinal
+                    )
+            )
+            .ToArray();
+    }
+
+    public static void Postfix(bool __state)
+    {
+        if (!__state)
+            return;
+
+        // Remember that the Fruit Skewer mission itself
+        // has been completed.
+        if (SaveManager.Current != null)
+        {
+            SaveManager.Current.SetBool(
+                "ArchipelagoFruitSkewerMissionComplete",
+                true
+            );
+
+            SaveManager.Save(
+                saveCurrent: true,
+                saveCurrentRun: false
+            );
+        }
+
+        bool fruitSkewerUnlocked =
+            SwitchManager.GetDestinySwitch(
+                "FruitSkewerClear",
+                fallback: false
+            );
+
+        // The mission requires the player to create a
+        // temporary Fruit Skewer. Remove it only if the
+        // permanent AP unlock has NOT already been received.
+        if (!fruitSkewerUnlocked)
+        {
+            if (SaveManager.Current != null)
+            {
+                SaveManager.Current.SetInt(
+                    "FruitSkewer_FruitCount",
+                    0
+                );
+
+                SaveManager.Current.SetInt(
+                    "FruitSkewer_AdaptiveItemDropBonus",
+                    0
+                );
+
+                SaveManager.Save(
+                    saveCurrent: true,
+                    saveCurrentRun: false
+                );
+            }
+
+            if (CombatManager.Instance != null &&
+                CombatManager.Instance.CurrentPlayer != null &&
+                NetworkServer.active)
+            {
+                PlayerLocalDataStorage data =
+                    CombatManager.Instance.CurrentPlayer
+                        .GetComponent<PlayerLocalDataStorage>();
+
+                if (data != null)
+                {
+                    data.UpdateFruitSkewerBonus();
+                }
+            }
+
+            MelonLogger.Msg(
+                "[AP Mission] Removed temporary Fruit Skewer."
+            );
+        }
+
+        SephiriaMod.TryCompleteArchipelagoMission(
+            "Fruit Skewer"
+        );
+
+        SephiriaMod.RefreshArchipelagoFruitSkewerStand();
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_FruitSkewerPanel),
+    nameof(UI_FruitSkewerPanel.OnOpened)
+)]
+public static class ArchipelagoFruitSkewerTutorialPatch
+{
+    public static void Prefix()
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        if (SaveManager.Current == null)
+            return;
+
+        SaveManager.Current.SetBool(
+            "FruitSkewerTutorial",
+            false
+        );
+    }
+}
+
+[HarmonyPatch(
+    typeof(FruitSkewerSelector),
+    nameof(FruitSkewerSelector.OpenUI)
+)]
+public static class ArchipelagoFruitSkewerSelectorPatch
+{
+    public static bool Prefix()
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        // AP Fruit Skewer Unlock received.
+        if (SwitchManager.GetDestinySwitch(
+                "FruitSkewerClear",
+                fallback: false))
+        {
+            return true;
+        }
+
+        if (CombatManager.Instance == null ||
+            CombatManager.Instance.CurrentPlayer == null)
+        {
+            return false;
+        }
+
+        QuestController questController =
+            CombatManager.Instance.CurrentPlayer
+                .GetComponent<QuestController>();
+
+        if (questController == null)
+            return false;
+
+        // Allow the stand temporarily while the
+        // Fruit Skewer mission is in progress.
+        return
+            questController.IsDoingQuest(
+                "Destiny_FruitSkewer_0") ||
+            questController.IsDoingQuest(
+                "Destiny_FruitSkewer_1") ||
+            questController.IsDoingQuest(
+                "Destiny_FruitSkewer_2") ||
+            questController.IsDoingQuest(
+                "Destiny_FruitSkewer_3") ||
+            questController.IsDoingQuest(
+                "Destiny_FruitSkewer_4");
+    }
+}
+
+[HarmonyPatch(
+    typeof(PlayerLocalDataStorage),
+    nameof(PlayerLocalDataStorage.CheckWeaponUnlocked)
+)]
+public static class ArchipelagoWeaponUnlockedPatch
+{
+    public static bool Prefix(
+        PlayerLocalDataStorage __instance)
+    {
+        // Normal saves keep 100% vanilla behavior.
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        __instance.isWeaponUnlocked.Clear();
+
+        if (SaveManager.Current.GetBool(
+                "ArchipelagoSwordAndShieldUnlocked",
+                false))
+        {
+            __instance.isWeaponUnlocked.Add(
+                EWeaponType.SwordAndShield,
+                true
+            );
+        }
+
+        if (SwitchManager.GetDestinySwitch(
+                "GreatswordUnlocked",
+                false))
+        {
+            __instance.isWeaponUnlocked.Add(
+                EWeaponType.GreatSword,
+                true
+            );
+        }
+
+        if (SwitchManager.GetDestinySwitch(
+                "DaggerUnlocked",
+                false))
+        {
+            __instance.isWeaponUnlocked.Add(
+                EWeaponType.Dagger,
+                true
+            );
+        }
+
+        if (SwitchManager.GetDestinySwitch(
+                "CrossbowUnlocked",
+                false))
+        {
+            __instance.isWeaponUnlocked.Add(
+                EWeaponType.Crossbow,
+                true
+            );
+        }
+
+        if (SwitchManager.GetDestinySwitch(
+                "KatanaUnlocked",
+                false))
+        {
+            __instance.isWeaponUnlocked.Add(
+                EWeaponType.Katana,
+                true
+            );
+        }
+
+        if (SwitchManager.GetDestinySwitch(
+            "StaffUnlocked",
+            false))
+        {
+            __instance.isWeaponUnlocked.Add(
+                EWeaponType.Staff,
+                true
+            );
+        }
+
+        SephiriaMod.QueueArchipelagoWeaponStandSync();
+
+        return false;
+    }
+}
+
+[HarmonyPatch(
+    typeof(TownWeaponStand),
+    nameof(TownWeaponStand.Interactive)
+)]
+public static class ArchipelagoWeaponStandInteractionPatch
+{
+    public static bool Prefix(
+        TownWeaponStand __instance)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        if (__instance == null ||
+            __instance.weapon == null ||
+            __instance.weapon.mainWeaponPrefab == null)
+        {
+            return true;
+        }
+
+        WeaponSimple weaponSimple =
+            __instance.weapon.mainWeaponPrefab
+                .GetComponent<WeaponSimple>();
+
+        if (weaponSimple == null)
+            return true;
+
+        EWeaponType weaponType =
+            weaponSimple.weaponType;
+
+        switch (weaponType)
+        {
+            case EWeaponType.SwordAndShield:
+            case EWeaponType.GreatSword:
+            case EWeaponType.Dagger:
+            case EWeaponType.Crossbow:
+            case EWeaponType.Staff:
+            case EWeaponType.Katana:
+                return SephiriaMod
+                    .IsArchipelagoWeaponOwned(
+                        weaponType
+                    );
+
+            default:
+                return true;
+        }
     }
 }
