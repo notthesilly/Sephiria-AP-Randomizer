@@ -117,7 +117,7 @@ namespace SephiriaAPRandomizer
         private static readonly List<ArchipelagoRecentItemCard> archipelagoRecentItemCards = new List<ArchipelagoRecentItemCard>();
         private static readonly List<string> archipelagoConsoleHistory = new List<string>();
         private static readonly List<string> archipelagoHintEntries = new List<string>();
-        private sealed class ArchipelagoScoutedItemData{ public string ItemName; public string PlayerName; public string GameName; public int Flags; }
+        private sealed class ArchipelagoScoutedItemData { public string ItemName; public string PlayerName; public string GameName; public int Flags; }
         private sealed class ArchipelagoRecentItemNotification { public string FirstLine; public string SecondLine; public float ExpiresAt; }
         private sealed class ArchipelagoRecentItemCard { public GameObject Root; public RectTransform Rect; public Image Background; public TextMeshProUGUI MainText; public TextMeshProUGUI SourceText; }
         private static readonly Dictionary<long, ArchipelagoScoutedItemData> archipelagoSephiriteScoutedItems = new Dictionary<long, ArchipelagoScoutedItemData>();
@@ -8456,7 +8456,7 @@ namespace SephiriaAPRandomizer
 
             PlayerAvatar player = CombatManager.Instance.CurrentPlayer;
 
-            WeaponControllerSimple weaponController =player.GetComponent<WeaponControllerSimple>();
+            WeaponControllerSimple weaponController = player.GetComponent<WeaponControllerSimple>();
 
             PlayerLocalDataStorage localDataStorage = player.GetComponent<PlayerLocalDataStorage>();
 
@@ -16131,7 +16131,7 @@ public static class GameOverLabelPatch
     {
         if (!SephiriaMod.IsArchipelagoSave)
             return;
-        
+
         if (SephiriaMod.ArchipelagoGoalPending)
         {
             MelonLogger.Msg(
@@ -17214,7 +17214,7 @@ public static class ArchipelagoSephiriteGeneratePatch
             return;
         }
 
-        if (SephiriaMod.WasArchipelagoSephiriteClaimed( __instance))
+        if (SephiriaMod.WasArchipelagoSephiriteClaimed(__instance))
         {
             APDebug.Log(
                 $"[AP Sephirite] Eligible " +
