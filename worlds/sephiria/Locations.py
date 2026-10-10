@@ -35,14 +35,68 @@ floor_names = {
 }
 
 
-SEPHIRITE_CHECKS_PER_FLOOR = 20
+late_floor_start_by_goal_chapter = {
+    1: 3,  # Library
+    2: 4,  # Wasteland
+    3: 5,  # Rooted Cave
+    4: 5,  # Rooted Cave
+    5: 5,  # Rooted Cave
+    6: 5,  # Rooted Cave
+}
 
 
-def get_sephirite_check_count(floor_number):
+early_destiny_inscription_candidates = [
+    "Destiny Inscription - Tablet",
+    "Destiny Inscription - Rylie's Gift",
+    "Destiny Inscription - Heavy Weapon Training",
+    "Destiny Inscription - Nimble Weapon Training",
+    "Destiny Inscription - Dice I",
+    "Destiny Inscription - Home Repairs",
+    "Destiny Inscription - Dice Acquisition",
+    "Destiny Inscription - Seed Money",
+    "Destiny Inscription - Ranged Weapon Training",
+    "Destiny Inscription - Talent Point I",
+    "Destiny Inscription - Talent Point II",
+    "Destiny Inscription - Level Up Restoration",
+    "Destiny Inscription - Increase HP I",
+]
+
+
+late_destiny_inscription_locations = {
+    "Destiny Inscription - Terrain Recovery",
+    "Destiny Inscription - Chest of Possibilities",
+    "Destiny Inscription - Basement",
+    "Destiny Inscription - Sharp Weapon Training",
+    "Destiny Inscription - Graceful Weapon Training",
+
+    "Destiny Inscription - Extra Experience Drop",
+    "Destiny Inscription - Talent Point IV",
+    "Destiny Inscription - Talent Point V",
+    "Destiny Inscription - Dice III",
+    "Destiny Inscription - Expanding Pouch II",
+    "Destiny Inscription - Side Bag II",
+
+    "Destiny Inscription - Artifact Unlock IV",
+    "Destiny Inscription - Artifact Unlock V",
+    "Destiny Inscription - Artifact Unlock VI",
+    "Destiny Inscription - Artifact Unlock VII",
+    "Destiny Inscription - Artifact Unlock VIII",
+    "Destiny Inscription - Bond Artifact Unlock",
+}
+
+
+DEFAULT_SEPHIRITE_CHECKS_PER_FLOOR = 20
+MAX_SEPHIRITE_CHECKS_PER_FLOOR = 30
+
+
+def get_sephirite_check_count(
+    floor_number,
+    sephirites_per_floor=DEFAULT_SEPHIRITE_CHECKS_PER_FLOOR
+):
     if floor_number == 6:
-        return SEPHIRITE_CHECKS_PER_FLOOR // 2
+        return sephirites_per_floor // 2
 
-    return SEPHIRITE_CHECKS_PER_FLOOR
+    return sephirites_per_floor
 
 
 shrine_location_table = {
@@ -59,7 +113,10 @@ next_location_id = 1001
 for floor_number in range(1, 7):
     floor_name = floor_names[floor_number]
 
-    floor_check_count = get_sephirite_check_count(floor_number)
+    floor_check_count = get_sephirite_check_count(
+        floor_number,
+        MAX_SEPHIRITE_CHECKS_PER_FLOOR
+    )
 
     for item_number in range(
         1,
@@ -85,14 +142,9 @@ costume_mission_location_table = {
     "Costume Mission - White Wolf": 2006,
     "Costume Mission - Wizard Bunny": 2007,
     "Costume Mission - Eagle": 2008,
-    "Costume Mission - Crocodile": 2009,
-    "Costume Mission - Deer": 2010,
-    "Costume Mission - Fairy of Fortune": 2011,
-    "Costume Mission - Farmer Squirrel": 2012,
     "Costume Mission - Turtle": 2013,
     "Costume Mission - Forest Cat": 2014,
     "Costume Mission - Ghost": 2015,
-    "Costume Mission - Scholar Lizard": 2016,
     "Costume Mission - Skeleton": 2017,
     "Costume Mission - Wingless Bat": 2018,
 }

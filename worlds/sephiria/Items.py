@@ -23,7 +23,7 @@ item_table = {
     "Severed Exchange Reduction": 15,
     "Rebellion of Machines Reduction": 16,
     "Proliferation Reduction": 17,
-    "Nothing": 18,
+    "5 Sapphires": 18,
 
     # Costumes
     "Fairy of Fortune": 19,
@@ -89,7 +89,7 @@ item_table = {
 
     # Destiny Inscription upgrades
     "Tablet Unlock": 71,
-    "Dice Upgrade I": 72,
+    "Progressive Dice Upgrade": 72,
     "Dice Acquisition": 73,
     "Seed Money": 74,
     "Chest of Possibilities": 75,
@@ -97,27 +97,15 @@ item_table = {
     "Dice Transformation": 77,
 
     "Level Up Restoration": 78,
-    "Dice Upgrade II": 79,
-    "Expanding Pouch I": 80,
-    "Expanding Pouch II": 81,
+    "Progressive Expanding Pouch": 80,
     "Extra Experience Drop": 82,
     "MP Regeneration": 83,
-    "Increase HP I": 84,
-    "Increase HP II": 85,
-    "Dice Upgrade III": 86,
-    "Side Bag I": 87,
-    "Side Bag II": 88,
+    "Progressive Increase HP": 84,
+    "Progressive Side Bag": 87,
 
     # Artifact unlock groups
-    "Artifact Unlock I": 89,
-    "Artifact Unlock II": 90,
-    "Artifact Unlock III": 91,
-    "Artifact Unlock IV": 92,
-    "Artifact Unlock V": 93,
-    "Artifact Unlock VI": 94,
+    "Progressive Artifact Unlock": 89,
     "Bond Artifact Unlock": 95,
-    "Artifact Unlock VII": 96,
-    "Artifact Unlock VIII": 97,
 
     # Mission Rewards
     "Potion Storage": 98,
@@ -125,7 +113,18 @@ item_table = {
     "Ingenuity Talent Unlock": 100,
     "Starting Potion": 101,
     "Costume Dyeing": 102,
-    "Fruit Skewer Unlock": 103
+    "Fruit Skewer Unlock": 103,
+
+    "Progressive Anvil Unlock": 104,
+
+    # Traps
+    "Can't Cast Trap": 105,
+    "Can't Dash Trap": 106,
+    "Can't Normal Attack Trap": 107,
+    "Flipped Controls Trap": 108,
+    "Bag Shuffle Trap": 109,
+
+    "Starting Cintamani Stone": 110,
 }
 
 
@@ -236,7 +235,6 @@ talent_point_item_count = 10
 
 destiny_upgrade_item_to_tree_shop_id = {
     "Tablet Unlock": 0,
-    "Dice Upgrade I": 4,
     "Dice Acquisition": 9,
     "Seed Money": 10,
     "Chest of Possibilities": 11,
@@ -244,32 +242,51 @@ destiny_upgrade_item_to_tree_shop_id = {
     "Dice Transformation": 16,
 
     "Level Up Restoration": 302,
-    "Dice Upgrade II": 303,
-    "Expanding Pouch I": 304,
-    "Expanding Pouch II": 305,
     "Extra Experience Drop": 306,
     "MP Regeneration": 309,
-    "Increase HP I": 311,
-    "Increase HP II": 312,
-    "Dice Upgrade III": 313,
-    "Side Bag I": 314,
-    "Side Bag II": 315,
 
-    "Artifact Unlock I": 1000,
-    "Artifact Unlock II": 1001,
-    "Artifact Unlock III": 1002,
-    "Artifact Unlock IV": 1003,
-    "Artifact Unlock V": 1004,
-    "Artifact Unlock VI": 1005,
     "Bond Artifact Unlock": 1006,
-    "Artifact Unlock VII": 1007,
-    "Artifact Unlock VIII": 1008,
+}
+
+
+destiny_progressive_upgrade_item_to_tree_shop_ids = {
+    "Progressive Dice Upgrade": [
+        4,
+        303,
+        313,
+    ],
+
+    "Progressive Expanding Pouch": [
+        304,
+        305,
+    ],
+
+    "Progressive Increase HP": [
+        311,
+        312,
+    ],
+
+    "Progressive Side Bag": [
+        314,
+        315,
+    ],
+
+    "Progressive Artifact Unlock": [
+        1000,
+        1001,
+        1002,
+        1003,
+        1004,
+        1005,
+        1007,
+        1008,
+    ],
 }
 
 
 destiny_upgrade_item_counts = {
     "Tablet Unlock": 1,
-    "Dice Upgrade I": 1,
+    "Progressive Dice Upgrade": 5,
     "Dice Acquisition": 1,
     "Seed Money": 2,
     "Chest of Possibilities": 1,
@@ -277,26 +294,14 @@ destiny_upgrade_item_counts = {
     "Dice Transformation": 1,
 
     "Level Up Restoration": 4,
-    "Dice Upgrade II": 2,
-    "Expanding Pouch I": 3,
-    "Expanding Pouch II": 3,
+    "Progressive Expanding Pouch": 6,
     "Extra Experience Drop": 1,
     "MP Regeneration": 2,
-    "Increase HP I": 2,
-    "Increase HP II": 2,
-    "Dice Upgrade III": 2,
-    "Side Bag I": 3,
-    "Side Bag II": 3,
+    "Progressive Increase HP": 4,
+    "Progressive Side Bag": 6,
 
-    "Artifact Unlock I": 1,
-    "Artifact Unlock II": 1,
-    "Artifact Unlock III": 1,
-    "Artifact Unlock IV": 1,
-    "Artifact Unlock V": 1,
-    "Artifact Unlock VI": 1,
+    "Progressive Artifact Unlock": 8,
     "Bond Artifact Unlock": 1,
-    "Artifact Unlock VII": 1,
-    "Artifact Unlock VIII": 1,
 }
 
 mission_reward_items = [
@@ -307,3 +312,13 @@ mission_reward_items = [
     "Costume Dyeing",
     "Fruit Skewer Unlock",
 ]
+
+progressive_anvil_unlock_item_count = 2
+
+trap_item_counts = {
+    "Can't Cast Trap": 4,
+    "Can't Dash Trap": 4,
+    "Can't Normal Attack Trap": 4,
+    "Flipped Controls Trap": 4,
+    "Bag Shuffle Trap": 4,
+}

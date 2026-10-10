@@ -1,13 +1,17 @@
 ﻿using Archipelago.MultiClient.Net;
+using Archipelago.MultiClient.Net.BounceFeatures.DeathLink;
 using Archipelago.MultiClient.Net.Enums;
 using Archipelago.MultiClient.Net.Helpers;
+using Archipelago.MultiClient.Net.MessageLog.Messages;
 using Archipelago.MultiClient.Net.Models;
+using Archipelago.MultiClient.Net.Packets;
 using HarmonyLib;
 using MelonLoader;
 using Mirror;
 using SephiriaAPRandomizer;
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -27,6 +31,15 @@ using UnityEngine.UI;
 
 namespace SephiriaAPRandomizer
 {
+    internal static class APDebug
+    {
+        [System.Diagnostics.Conditional("DEBUG")]
+        public static void Log(string message)
+        {
+            MelonLogger.Msg(message);
+        }
+    }
+
     public class SephiriaMod : MelonMod
     {
         private static object session;
@@ -39,17 +52,33 @@ namespace SephiriaAPRandomizer
         public static int GoalChapter { get; private set; }
         public static int RequiredChapterClears { get; private set; }
         public static bool UniqueWeaponsRequired { get; private set; }
+        public static bool RandomizeAnvilUnlocks { get; private set; } = true;
+        public static int StartingCintamaniStonePoolCount { get; private set; } = 0;
+        private static bool cintamaniSyncPending;
+        public static int SapphireMultiplier { get; private set; } = 1;
         public static string StartingCostumeId { get; private set; }
         public static EWeaponType? StartingWeaponType { get; private set; }
         public static int CompletedChapterClears { get; private set; }
         public static bool Chapter2EndingReached { get; set; }
         public static bool ArchipelagoGoalPending { get; set; }
-
+        public static bool IsSynchronizingArchipelagoDestinyUpgrades { get; private set; }
+        private static int archipelagoConsoleHistoryVersion;
+        private static int archipelagoHintHistoryVersion;
         private static bool hardModeSyncPending;
         private static bool permanentItemSyncPending;
         private static bool startingWeaponInitializationPending;
         private static bool weaponStandSyncPending;
+        private static bool archipelagoRecentItemsResetPending;
         public static bool IsBuildingArchipelagoCostumePanel;
+        public static bool DeathLinkEnabled { get; private set; } = false;
+        private static object deathLinkService;
+
+        public static bool TrapsEnabled { get; private set; } = false;
+        private static bool trapSyncPending;
+        private static float cannotCastTrapUntil;
+        private static float cannotDashTrapUntil;
+        private static float cannotNormalAttackTrapUntil;
+        private static float flippedControlsTrapUntil;
 
         public const string ArchipelagoShrineMarker = "__SEPHIRIA_ARCHIPELAGO_SHRINE__";
         public const string ArchipelagoShrineUsedMarker = "__SEPHIRIA_ARCHIPELAGO_SHRINE_USED__";
@@ -63,15 +92,37 @@ namespace SephiriaAPRandomizer
         private const string ArchipelagoSephiriteChoicesSavedPrefix = "ArchipelagoSephiriteChoicesSaved_";
         private const string ArchipelagoSephiriteClaimedPrefix = "ArchipelagoSephiriteClaimed_";
         private const string ArchipelagoSephiritePendingClaimPrefix = "ArchipelagoSephiritePendingClaim_";
-        
+        private const string ArchipelagoAnvilUsesThisRunKey = "ArchipelagoAnvilUsesThisRun";
+        private const string ArchipelagoSapphireFillerItemName = "5 Sapphires";
+        private const string ArchipelagoProcessedSapphireFillerCountKey = "ArchipelagoProcessedSapphireFillerCount";
+        private const string ArchipelagoProcessedTrapCountKey = "ArchipelagoProcessedTrapCount";
+        private const string ArchipelagoStartingCintamaniStoneItemName = "Starting Cintamani Stone";
+        private const string ArchipelagoCintamaniGrantedThisRunKey = "ArchipelagoCintamaniGrantedThisRun";
+        private const int ArchipelagoCintamaniEntityId = 1146;
+        private const int ArchipelagoRecentItemsMaxVisible = 3;
+        private const float ArchipelagoRecentItemLifetime = 8f;
+        private const int ArchipelagoConsoleHistoryLimit = 120;
+
         private static readonly HashSet<int> activeArchipelagoSephiriteRuntimeInstances = new HashSet<int>();
         private static readonly HashSet<int> blockedArchipelagoSephiriteRuntimeInstances = new HashSet<int>();
         private static readonly Dictionary<int, long> archipelagoSephiriteLocationByRewardInstanceId = new Dictionary<int, long>();
         private static readonly Dictionary<int, string> archipelagoSephiriteLocationNameByRewardInstanceId = new Dictionary<int, string>();
         private static readonly Dictionary<int, string> archipelagoSephiriteRuntimeIdentities = new Dictionary<int, string>();
+        private static readonly object archipelagoRecentItemsLock = new object();
+        private static readonly object archipelagoConsoleLock = new object();
+        private static readonly object archipelagoHintLock = new object();
+        private static readonly Queue<ArchipelagoRecentItemNotification> pendingArchipelagoRecentItems = new Queue<ArchipelagoRecentItemNotification>();
+        private static readonly ConcurrentQueue<object> receivedDeathLinks = new ConcurrentQueue<object>();
+        private static readonly List<ArchipelagoRecentItemNotification> visibleArchipelagoRecentItems = new List<ArchipelagoRecentItemNotification>();
+        private static readonly List<ArchipelagoRecentItemCard> archipelagoRecentItemCards = new List<ArchipelagoRecentItemCard>();
+        private static readonly List<string> archipelagoConsoleHistory = new List<string>();
+        private static readonly List<string> archipelagoHintEntries = new List<string>();
         private sealed class ArchipelagoScoutedItemData{ public string ItemName; public string PlayerName; public string GameName; public int Flags; }
+        private sealed class ArchipelagoRecentItemNotification { public string FirstLine; public string SecondLine; public float ExpiresAt; }
+        private sealed class ArchipelagoRecentItemCard { public GameObject Root; public RectTransform Rect; public Image Background; public TextMeshProUGUI MainText; public TextMeshProUGUI SourceText; }
         private static readonly Dictionary<long, ArchipelagoScoutedItemData> archipelagoSephiriteScoutedItems = new Dictionary<long, ArchipelagoScoutedItemData>();
         private static readonly Dictionary<long, ArchipelagoScoutedItemData> archipelagoCostumeMissionScoutedItems = new Dictionary<long, ArchipelagoScoutedItemData>();
+        private static readonly Dictionary<long, ArchipelagoScoutedItemData> archipelagoDestinyInscriptionScoutedItems = new Dictionary<long, ArchipelagoScoutedItemData>();
         private static readonly Dictionary<string, string>
             archipelagoCostumeItems =
                 new Dictionary<string, string>
@@ -118,14 +169,9 @@ namespace SephiriaAPRandomizer
                     { "WhiteWolf", 2006 },
                     { "WizardRabbit", 2007 },
                     { "Bird", 2008 },
-                    { "Crocodile", 2009 },
-                    { "Deer", 2010 },
-                    { "Luck", 2011 },
-                    { "Squirrel", 2012 },
                     { "Turtle", 2013 },
                     { "ForestCat", 2014 },
                     { "Ghost", 2015 },
-                    { "Seren", 2016 },
                     { "Skeleton", 2017 },
                     { "Bat", 2018 }
                 };
@@ -141,14 +187,9 @@ namespace SephiriaAPRandomizer
                     { "WhiteWolf", "White Wolf" },
                     { "WizardRabbit", "Wizard Bunny" },
                     { "Bird", "Eagle" },
-                    { "Crocodile", "Crocodile" },
-                    { "Deer", "Deer" },
-                    { "Luck", "Fairy of Fortune" },
-                    { "Squirrel", "Farmer Squirrel" },
                     { "Turtle", "Turtle" },
                     { "ForestCat", "Forest Cat" },
                     { "Ghost", "Ghost" },
-                    { "Seren", "Scholar Lizard" },
                     { "Skeleton", "Skeleton" },
                     { "Bat", "Wingless Bat" }
                 };
@@ -164,17 +205,32 @@ namespace SephiriaAPRandomizer
                     { "WhiteWolf", "Defeat Rataka, pillager leader at least 5 times" },
                     { "WizardRabbit", "Defeat enemies 50 times with a grimoire" },
                     { "Bird", "Increase dash count to 8" },
-                    { "Crocodile", "Clear the game after achieving 10 Guardian combos" },
-                    { "Deer", "Clear the game without using the Wishing Fountain" },
-                    { "Luck", "Clear the game on any chapter" },
-                    { "Squirrel", "Clear the game without using a fruit skewer" },
                     { "Turtle", "Have 12 artifacts reach max level in a single adventure" },
                     { "ForestCat", "Collect 2500 leaf" },
                     { "Ghost", "Obtain at least 5 grimoires in a single adventure" },
-                    { "Seren", "Clear hard mode at tier 20 or above" },
                     { "Skeleton", "Take 333 damage in a single adventure" },
                     { "Bat", "Use the blood donation shrine 5 times" }
                 };
+        private static readonly HashSet<string>
+            removedArchipelagoCostumeMissionIds =
+                new HashSet<string>(
+                    StringComparer.Ordinal
+                )
+                {
+                    "Crocodile",
+                    "Deer",
+                    "Luck",
+                    "Squirrel",
+                    "Seren"
+                };
+        public static bool IsRemovedArchipelagoCostumeMission(
+            string costumeId)
+        {
+            return !string.IsNullOrEmpty(costumeId) &&
+                   removedArchipelagoCostumeMissionIds.Contains(
+                       costumeId
+                   );
+        }
         private static readonly Dictionary<string, int>
             archipelagoPermanentRewardItems =
                 new Dictionary<string, int>(
@@ -272,20 +328,184 @@ namespace SephiriaAPRandomizer
                     { "Staff Unlock", EWeaponType.Staff },
                     { "Katana Unlock", EWeaponType.Katana }
                 };
+        private static readonly Dictionary<int, long>
+            archipelagoDestinyInscriptionLocationsByTreeShopId =
+                new Dictionary<int, long>
+                {
+                    { 0, 3001 },       // Tablet
+                    { 1, 3002 },       // Rylie's Gift
+                    { 2, 3003 },       // Heavy Weapon Training
+                    { 3, 3004 },       // Nimble Weapon Training
+                    { 4, 3005 },       // Dice I
+                    { 5, 3006 },       // Magic Workshop
+                    { 6, 3007 },       // Home Repairs
+                    { 7, 3008 },       // Terrain Recovery
+                    { 9, 3009 },       // Dice Acquisition
+                    { 10, 3010 },      // Seed Money
+                    { 11, 3011 },      // Chest of Possibilities
+                    { 12, 3012 },      // Ranged Weapon Training
+                    { 13, 3013 },      // Basement
+                    { 14, 3014 },      // Wishing Fountain
+                    { 16, 3015 },      // Dice Transformation
+                    { 17, 3016 },      // Sharp Weapon Training
+                    { 18, 3017 },      // Hide and Seek
+                    { 19, 3018 },      // Graceful Weapon Training
+                    { 20, 3019 },      // Fruit Skewer
+
+                    { 300, 3020 },     // Talent Point I
+                    { 301, 3021 },     // Talent Point II
+                    { 302, 3022 },     // Level Up Restoration
+                    { 303, 3023 },     // Dice II
+                    { 304, 3024 },     // Expanding Pouch I
+                    { 305, 3025 },     // Expanding Pouch II
+                    { 306, 3026 },     // Extra Experience Drop
+                    { 307, 3027 },     // Talent Point III
+                    { 308, 3028 },     // Talent Point IV
+                    { 309, 3029 },     // MP Regeneration
+                    { 310, 3030 },     // Talent Point V
+                    { 311, 3031 },     // Increase HP I
+                    { 312, 3032 },     // Increase HP II
+                    { 313, 3033 },     // Dice III
+                    { 314, 3034 },     // Side Bag I
+                    { 315, 3035 },     // Side Bag II
+
+                    { 1000, 3036 },    // Artifact Unlock I
+                    { 1001, 3037 },    // Artifact Unlock II
+                    { 1002, 3038 },    // Artifact Unlock III
+                    { 1003, 3039 },    // Artifact Unlock IV
+                    { 1004, 3040 },    // Artifact Unlock V
+                    { 1005, 3041 },    // Artifact Unlock VI
+                    { 1006, 3042 },    // Bond Artifact Unlock
+                    { 1007, 3043 },    // Artifact Unlock VII
+                    { 1008, 3044 }     // Artifact Unlock VIII
+                };
+        private static readonly Dictionary<string, int>
+            archipelagoDestinyUpgradeItems =
+                new Dictionary<string, int>(
+                    StringComparer.Ordinal
+                )
+                {
+                    { "Tablet Unlock", 0 },
+                    { "Dice Acquisition", 9 },
+                    { "Seed Money", 10 },
+                    { "Chest of Possibilities", 11 },
+                    { "Wishing Fountain Upgrade", 14 },
+                    { "Dice Transformation", 16 },
+
+                    { "Level Up Restoration", 302 },
+                    { "Extra Experience Drop", 306 },
+                    { "MP Regeneration", 309 },
+
+                    { "Bond Artifact Unlock", 1006 }
+                };
+
+
+        private static readonly Dictionary<string, int[]>
+            archipelagoProgressiveDestinyUpgradeItems =
+                new Dictionary<string, int[]>(
+                    StringComparer.Ordinal
+                )
+                {
+            {
+                "Progressive Dice Upgrade",
+                new int[]
+                {
+                    4,
+                    303,
+                    313
+                }
+            },
+
+            {
+                "Progressive Expanding Pouch",
+                new int[]
+                {
+                    304,
+                    305
+                }
+            },
+
+            {
+                "Progressive Increase HP",
+                new int[]
+                {
+                    311,
+                    312
+                }
+            },
+
+            {
+                "Progressive Side Bag",
+                new int[]
+                {
+                    314,
+                    315
+                }
+            },
+
+            {
+                "Progressive Artifact Unlock",
+                new int[]
+                {
+                    1000,
+                    1001,
+                    1002,
+                    1003,
+                    1004,
+                    1005,
+                    1007,
+                    1008
+                }
+            }
+                };
+        private static readonly string[] archipelagoDeathLinkMessages = new string[]
+        {
+            "{0} met an unfortunate end in Sephiria.",
+            "{0} was defeated during their adventure.",
+            "{0} failed to make it back to town.",
+            "{0}'s adventure came to an abrupt end.",
+            "{0} has fallen in Sephiria.",
+            "{0} made an oopsie.",
+            "{0} forgot to dodge.",
+            "{0} forgot that health is supposed to stay above 0",
+            "{0} discovered that dying is, in fact, fatal",
+            "{0} discovered a skill issue",
+            "{0} died. Unfortunitely, that's everyone's problem now.",
+            "{0} couldn't win, so nobody else gets to either"
+        };
+        private static readonly HashSet<string>
+            archipelagoTrapItemNames =
+                new HashSet<string>(
+                    StringComparer.Ordinal
+                )
+                {
+                    "Can't Cast Trap",
+                    "Can't Dash Trap",
+                    "Can't Normal Attack Trap",
+                    "Flipped Controls Trap",
+                    "Bag Shuffle Trap"
+                };
         private static readonly HashSet<int> archipelagoPermanentRewardTreeShopIds = new HashSet<int>(archipelagoPermanentRewardItems.Values);
         private static readonly FieldInfo sephiriteRerollButtonGroupField = AccessTools.Field(typeof(UI_SephiriteRewardPanel), "rerollButtonGroup");
         private static readonly FieldInfo sephiriteSkipSelectButtonGroupField = AccessTools.Field(typeof(UI_SephiriteRewardPanel), "skipSelectButtonGroup");
         private static readonly FieldInfo sephiriteConvertRerollDiceButtonGroupField = AccessTools.Field(typeof(UI_SephiriteRewardPanel), "convertRerollDiceButtonGroup");
         private static readonly FieldInfo sephiriteSelectSoundField = AccessTools.Field(typeof(UI_SephiriteRewardPanel), "selectSound");
         private static readonly System.Random archipelagoShrineCheckRandom = new System.Random();
+        private static readonly System.Random archipelagoDeathLinkMessageRandom = new System.Random();
+        private static readonly System.Random archipelagoTrapRandom = new System.Random();
         private static int hiddenRoomRewardAttemptsThisRun;
         private static UnityEngine.Sprite archipelagoShrineSprite;
         private static UnityEngine.Sprite archipelagoSephiriteSprite;
         private static UnityEngine.Sprite archipelagoSephiriteOutlineSprite;
         private static UnityEngine.Sprite archipelagoSaveProfileSprite;
         private static UnityEngine.Sprite archipelagoSaveProfileOutlineSprite;
+        private static GameObject archipelagoRecentItemsHudRoot;
+        private static object pendingDeathLink;
+        private static bool suppressNextOutgoingDeathLink;
+        private static string currentArchipelagoSlotName;
         private static bool wasArchipelagoConnected;
         private static bool disconnectMessageShown;
+        private static bool suppressOutgoingDeathLinkForRunVictory;
 
         public static bool IsArchipelagoConnected
         {
@@ -316,7 +536,7 @@ namespace SephiriaAPRandomizer
 
             if (hiddenRoomRewardAttemptsThisRun >= 3)
             {
-                MelonLogger.Msg(
+                APDebug.Log(
                     "[AP Shrine] Third hidden-room reward - " +
                     "forcing Archipelago Shrine."
                 );
@@ -328,7 +548,7 @@ namespace SephiriaAPRandomizer
 
             bool spawnArchipelagoShrine = apRandom.Next(0, 2) == 0;
 
-            MelonLogger.Msg(
+            APDebug.Log(
                 $"[AP Shrine] Hidden-room reward " +
                 $"#{hiddenRoomRewardAttemptsThisRun}: " +
                 $"{(spawnArchipelagoShrine ? "AP Shrine" : "normal reward")}."
@@ -518,7 +738,7 @@ namespace SephiriaAPRandomizer
                         foreach (string resourceName in
                             assembly.GetManifestResourceNames())
                         {
-                            MelonLogger.Msg(
+                            APDebug.Log(
                                 "[AP Shrine Resource] " +
                                 resourceName
                             );
@@ -616,7 +836,7 @@ namespace SephiriaAPRandomizer
                         archipelagoShrineSprite.name =
                             "ArchipelagoShrineLogo";
 
-                        MelonLogger.Msg(
+                        APDebug.Log(
                             $"[AP Shrine] Loaded logo: " +
                             $"{texture.width}x" +
                             $"{texture.height}"
@@ -1279,7 +1499,7 @@ namespace SephiriaAPRandomizer
 
             shrine.diceRenderer.sprite = logo;
 
-            MelonLogger.Msg(
+            APDebug.Log(
                 "[AP Shrine] Applied Archipelago logo."
             );
         }
@@ -1353,7 +1573,7 @@ namespace SephiriaAPRandomizer
                 saveCurrentRun: true
             );
 
-            MelonLogger.Msg(
+            APDebug.Log(
                 $"[AP Shrine] Persisted used shrine " +
                 $"RandomID={sourceRandomId}."
             );
@@ -1683,7 +1903,7 @@ namespace SephiriaAPRandomizer
                 return false;
             }
 
-            MelonLogger.Msg(
+            APDebug.Log(
                 $"[AP Sephirite] Marked claimed: {identity}."
             );
 
@@ -1737,7 +1957,7 @@ namespace SephiriaAPRandomizer
                 return false;
             }
 
-            MelonLogger.Msg(
+            APDebug.Log(
                 $"[AP Sephirite] Pending claim saved: " +
                 $"{identity} -> {locationId}."
             );
@@ -2139,7 +2359,7 @@ namespace SephiriaAPRandomizer
                 return false;
             }
 
-            MelonLogger.Msg(
+            APDebug.Log(
                 $"[AP Sephirite] Persisted " +
                 $"{selectedLocations.Count} choices for " +
                 $"{identity}."
@@ -2415,7 +2635,7 @@ namespace SephiriaAPRandomizer
                 return false;
             }
 
-            MelonLogger.Msg(
+            APDebug.Log(
                 $"[AP Sephirite] Restored " +
                 $"{selectedLocations.Count} saved choices " +
                 $"for {identity}."
@@ -3146,7 +3366,7 @@ namespace SephiriaAPRandomizer
                     };
                 }
 
-                MelonLogger.Msg(
+                APDebug.Log(
                     "[AP Sephirite] Scouted " +
                     archipelagoSephiriteScoutedItems.Count +
                     " Sephirite item locations."
@@ -3215,7 +3435,7 @@ namespace SephiriaAPRandomizer
                     };
                 }
 
-                MelonLogger.Msg(
+                APDebug.Log(
                     "[AP Costume Mission] Scouted " +
                     archipelagoCostumeMissionScoutedItems.Count +
                     " costume mission locations."
@@ -3229,6 +3449,165 @@ namespace SephiriaAPRandomizer
                     ex.Message
                 );
             }
+        }
+
+        private static async Task ScoutArchipelagoDestinyInscriptionItems(
+            ArchipelagoSession apSession)
+        {
+            archipelagoDestinyInscriptionScoutedItems.Clear();
+
+            if (apSession == null ||
+                !apSession.Socket.Connected)
+            {
+                return;
+            }
+
+            long[] locationIds =
+                archipelagoDestinyInscriptionLocationsByTreeShopId
+                    .Values
+                    .ToArray();
+
+            if (locationIds.Length == 0)
+                return;
+
+            try
+            {
+                var scoutedItems =
+                    await apSession.Locations
+                        .ScoutLocationsAsync(
+                            false,
+                            locationIds
+                        );
+
+                foreach (var pair in scoutedItems)
+                {
+                    var scoutedItem = pair.Value;
+
+                    archipelagoDestinyInscriptionScoutedItems[
+                        pair.Key
+                    ] = new ArchipelagoScoutedItemData
+                    {
+                        ItemName =
+                            scoutedItem.ItemDisplayName,
+
+                        PlayerName =
+                            scoutedItem.Player != null
+                                ? scoutedItem.Player.Alias
+                                : "",
+
+                        GameName =
+                            scoutedItem.ItemGame,
+
+                        Flags =
+                            Convert.ToInt32(
+                                scoutedItem.Flags
+                            )
+                    };
+                }
+
+                APDebug.Log(
+                    "[AP Tree] Scouted " +
+                    archipelagoDestinyInscriptionScoutedItems.Count +
+                    " Destiny Inscription locations."
+                );
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning(
+                    "[AP Tree] Could not scout Destiny " +
+                    "Inscription items: " +
+                    ex.Message
+                );
+            }
+        }
+
+        public static bool TryGetArchipelagoDestinyInscriptionScoutedDisplay(
+            int treeShopItemId,
+            out string itemName,
+            out string itemDescription)
+        {
+            itemName = null;
+            itemDescription = null;
+
+            long locationId;
+
+            if (!archipelagoDestinyInscriptionLocationsByTreeShopId
+                    .TryGetValue(
+                        treeShopItemId,
+                        out locationId))
+            {
+                return false;
+            }
+
+            ArchipelagoScoutedItemData itemData;
+
+            if (!archipelagoDestinyInscriptionScoutedItems
+                    .TryGetValue(
+                        locationId,
+                        out itemData))
+            {
+                return false;
+            }
+
+            if (itemData == null ||
+                string.IsNullOrEmpty(itemData.ItemName))
+            {
+                return false;
+            }
+
+            itemName = itemData.ItemName;
+
+            // Same classification descriptions used
+            // by the Sephirite AP rewards.
+            string classificationDescription;
+
+            if ((itemData.Flags & 1) != 0)
+            {
+                classificationDescription =
+                    "This seems important.";
+            }
+            else if ((itemData.Flags & 2) != 0)
+            {
+                classificationDescription =
+                    "This seems useful.";
+            }
+            else if ((itemData.Flags & 4) != 0)
+            {
+                classificationDescription =
+                    "This seems dangerous.";
+            }
+            else
+            {
+                classificationDescription =
+                    "This seems ordinary.";
+            }
+
+            string recipientText =
+                itemData.ItemName;
+
+            if (!string.IsNullOrEmpty(
+                    itemData.PlayerName))
+            {
+                recipientText +=
+                    " for " +
+                    itemData.PlayerName;
+            }
+
+            if (!string.IsNullOrEmpty(
+                    itemData.GameName))
+            {
+                recipientText +=
+                    " (" +
+                    itemData.GameName +
+                    ")";
+            }
+
+            itemDescription =
+                recipientText +
+                "\n" +
+                classificationDescription;
+
+            return true;
         }
 
         public static bool TryGetArchipelagoSephiriteScoutedDisplay(
@@ -3344,14 +3723,14 @@ namespace SephiriaAPRandomizer
 
                 rewardElement.isGoodItem = true;
             }
-            else if ((itemData.Flags & 2) != 0)
+            else if ((itemData.Flags & 4) != 0)
             {
                 rewardElement.bgImage.sprite =
                     rewardElement.rareBGSprite;
 
                 rewardElement.isGoodItem = true;
             }
-            else if ((itemData.Flags & 4) != 0)
+            else if ((itemData.Flags & 2) != 0)
             {
                 rewardElement.bgImage.sprite =
                     rewardElement.uncummonBGSprite;
@@ -3422,11 +3801,11 @@ namespace SephiriaAPRandomizer
             {
                 rarity = EItemRarity.Legend;
             }
-            else if ((itemData.Flags & 2) != 0)
+            else if ((itemData.Flags & 4) != 0)
             {
                 rarity = EItemRarity.Rare;
             }
-            else if ((itemData.Flags & 4) != 0)
+            else if ((itemData.Flags & 2) != 0)
             {
                 rarity = EItemRarity.Uncommon;
             }
@@ -3520,69 +3899,6 @@ namespace SephiriaAPRandomizer
                         { "PROLIFERATE", 2 }
                     };
 
-        private static void LogArchipelagoHardModeRuntimeState()
-        {
-            if (!IsArchipelagoSave)
-                return;
-
-            if (DungeonManager.Instance == null)
-            {
-                MelonLogger.Msg(
-                    "[AP Hard Mode Runtime] DungeonManager is null."
-                );
-
-                return;
-            }
-
-            foreach (KeyValuePair<string, int> shard
-                in hardModeMaxLevelsByShardKey)
-            {
-                string shardKey = shard.Key;
-
-                int savedLevel =
-                    SaveManager.Current.GetInt(
-                        "HardModeShard_" +
-                        shardKey +
-                        "_Level",
-                        -999
-                    );
-
-                int runtimeLevel = -999;
-                int runtimeEnvironment = -999;
-
-                bool hasRuntimeLevel =
-                    DungeonManager.Instance
-                        .hardModeShardLevels
-                        .TryGetValue(
-                            shardKey,
-                            out runtimeLevel
-                        );
-
-                bool hasRuntimeEnvironment =
-                    DungeonManager.Instance
-                        .hardModeEnvironment
-                        .TryGetValue(
-                            shardKey,
-                            out runtimeEnvironment
-                        );
-
-                MelonLogger.Msg(
-                    "[AP Hard Mode Runtime] " +
-                    shardKey +
-                    " | SavedLevel=" +
-                    savedLevel +
-                    " | RuntimeLevel=" +
-                    (hasRuntimeLevel
-                        ? runtimeLevel.ToString()
-                        : "MISSING") +
-                    " | Environment=" +
-                    (hasRuntimeEnvironment
-                        ? runtimeEnvironment.ToString()
-                        : "MISSING")
-                                    );
-            }
-        }
-
         public static bool IsArchipelagoSave
         {
             get
@@ -3600,15 +3916,34 @@ namespace SephiriaAPRandomizer
             GoalChapter = 0;
             RequiredChapterClears = 0;
             UniqueWeaponsRequired = false;
+            RandomizeAnvilUnlocks = true;
+            SapphireMultiplier = 1;
             StartingCostumeId = null;
             StartingWeaponType = null;
             CompletedChapterClears = 0;
+            DeathLinkEnabled = false;
+            pendingDeathLink = null;
+            suppressNextOutgoingDeathLink = false;
+            currentArchipelagoSlotName = null;
+            deathLinkService = null;
+            TrapsEnabled = false;
+            trapSyncPending = false;
+            cannotCastTrapUntil = 0f;
+            cannotDashTrapUntil = 0f;
+            cannotNormalAttackTrapUntil = 0f;
+            flippedControlsTrapUntil = 0f;
+            suppressOutgoingDeathLinkForRunVictory = false;
+            StartingCintamaniStonePoolCount = 0;
+            cintamaniSyncPending = false;
+
+            object ignoreDeathLink;
+
+            while (receivedDeathLinks.TryDequeue(out ignoreDeathLink)) { }
 
             Chapter2EndingReached = false;
             ArchipelagoGoalPending = false;
 
             completedWeaponTypes.Clear();
-
             archipelagoSephiriteRuntimeIdentities.Clear();
             activeArchipelagoSephiriteRuntimeInstances.Clear();
             blockedArchipelagoSephiriteRuntimeInstances.Clear();
@@ -3616,6 +3951,14 @@ namespace SephiriaAPRandomizer
             archipelagoSephiriteLocationNameByRewardInstanceId.Clear();
             archipelagoSephiriteScoutedItems.Clear();
             archipelagoCostumeMissionScoutedItems.Clear();
+            archipelagoDestinyInscriptionScoutedItems.Clear();
+            archipelagoReceivedTreeShopCounts.Clear();
+
+            archipelagoReceivedTreeShopCachedItemTotal = -1;
+            archipelagoReceivedTreeShopCachedStartingWeapon = null;
+
+            ClearArchipelagoConsoleHistory();
+            ClearArchipelagoHintHistory();
 
             ResetArchipelagoShrineRunState();
 
@@ -3626,9 +3969,1011 @@ namespace SephiriaAPRandomizer
 
             wasArchipelagoConnected = false;
             disconnectMessageShown = false;
+
+            lock (archipelagoRecentItemsLock)
+            {
+                pendingArchipelagoRecentItems.Clear();
+
+                archipelagoRecentItemsResetPending = true;
+            }
         }
 
         public static HashSet<EWeaponType> completedWeaponTypes = new HashSet<EWeaponType>();
+
+        private static void QueueArchipelagoRecentItem(
+            string firstLine,
+            string secondLine)
+        {
+            if (string.IsNullOrEmpty(firstLine))
+                return;
+
+            lock (archipelagoRecentItemsLock)
+            {
+                pendingArchipelagoRecentItems.Enqueue(
+                    new ArchipelagoRecentItemNotification
+                    {
+                        FirstLine = firstLine,
+                        SecondLine = secondLine
+                    }
+                );
+            }
+        }
+
+        private static void HandleArchipelagoMessage(
+            LogMessage message)
+        {
+            if (message == null)
+                return;
+
+            // -------------------------------------------------
+            // Console log
+            // 
+
+            if (message.GetType() !=
+                typeof(ItemSendLogMessage))
+            {
+                QueueArchipelagoConsoleLine(
+                    message.ToString()
+                );
+            }
+
+
+            // -------------------------------------------------
+            // Recent Items
+            // -------------------------------------------------
+
+            if (message.GetType() !=
+                typeof(ItemSendLogMessage))
+            {
+                return;
+            }
+
+            ItemSendLogMessage itemMessage =
+                (ItemSendLogMessage)message;
+
+            if (!itemMessage.IsRelatedToActivePlayer ||
+                itemMessage.Item == null)
+            {
+                return;
+            }
+
+            string itemName =
+                itemMessage.Item.ItemDisplayName;
+
+            // -------------------------------------------------
+            // RECEIVED
+            // -------------------------------------------------
+
+            if (itemMessage.IsReceiverTheActivePlayer)
+            {
+                // We found our own item.
+                //
+                // Do NOT also create a "Sent to myself"
+                // notification. Show where in our game the
+                // item came from instead.
+                if (itemMessage.IsSenderTheActivePlayer)
+                {
+                    string locationName =
+                        itemMessage.Item.LocationDisplayName;
+
+                    QueueArchipelagoRecentItem(
+                        $"Received: {itemName}",
+                        $"from {locationName}"
+                    );
+
+                    MelonLogger.Msg(
+                        $"[AP Recent] Received: {itemName} | " +
+                        $"from {locationName}"
+                    );
+
+                    return;
+                }
+
+                // Another player found our item.
+                string senderName =
+                    itemMessage.Sender != null &&
+                    !string.IsNullOrEmpty(
+                        itemMessage.Sender.Alias
+                    )
+                        ? itemMessage.Sender.Alias
+                        : "Another Player";
+
+                QueueArchipelagoRecentItem(
+                    $"Received: {itemName}",
+                    $"from {senderName}"
+                );
+
+                MelonLogger.Msg(
+                    $"[AP Recent] Received: {itemName} | " +
+                    $"from {senderName}"
+                );
+
+                return;
+            }
+
+            // -------------------------------------------------
+            // SENT
+            // -------------------------------------------------
+
+            if (itemMessage.IsSenderTheActivePlayer)
+            {
+                string receiverName =
+                    itemMessage.Receiver != null &&
+                    !string.IsNullOrEmpty(
+                        itemMessage.Receiver.Alias
+                    )
+                        ? itemMessage.Receiver.Alias
+                        : "Another Player";
+
+                QueueArchipelagoRecentItem(
+                    $"Sent: {itemName}",
+                    $"to {receiverName}"
+                );
+
+                MelonLogger.Msg(
+                    $"[AP Recent] Sent: {itemName} | " +
+                    $"to {receiverName}"
+                );
+            }
+        }
+
+        private static void QueueArchipelagoConsoleLine(
+            string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return;
+
+            string normalized =
+                text.Replace("\r", "");
+
+            string[] lines =
+                normalized.Split('\n');
+
+            lock (archipelagoConsoleLock)
+            {
+                foreach (string rawLine in lines)
+                {
+                    string line =
+                        rawLine.Trim();
+
+                    if (string.IsNullOrEmpty(line))
+                        continue;
+
+                    archipelagoConsoleHistory.Add(
+                        line
+                    );
+                }
+
+                while (archipelagoConsoleHistory.Count >
+                       ArchipelagoConsoleHistoryLimit)
+                {
+                    archipelagoConsoleHistory.RemoveAt(0);
+                }
+
+                archipelagoConsoleHistoryVersion++;
+            }
+        }
+
+
+        public static List<string> GetArchipelagoConsoleHistory()
+        {
+            lock (archipelagoConsoleLock)
+            {
+                return new List<string>(
+                    archipelagoConsoleHistory
+                );
+            }
+        }
+
+
+        public static int GetArchipelagoConsoleHistoryVersion()
+        {
+            lock (archipelagoConsoleLock)
+            {
+                return archipelagoConsoleHistoryVersion;
+            }
+        }
+
+
+        public static void ClearArchipelagoConsoleHistory()
+        {
+            lock (archipelagoConsoleLock)
+            {
+                archipelagoConsoleHistory.Clear();
+
+                archipelagoConsoleHistoryVersion++;
+            }
+        }
+
+        private static void ReplaceArchipelagoHints(
+            Hint[] hints)
+        {
+            List<string> formattedEntries =
+                new List<string>();
+
+            if (hints != null)
+            {
+                foreach (Hint hint in hints)
+                {
+                    string entry =
+                        FormatArchipelagoHint(
+                            hint
+                        );
+
+                    if (!string.IsNullOrEmpty(
+                            entry))
+                    {
+                        formattedEntries.Add(
+                            entry
+                        );
+                    }
+                }
+            }
+
+            lock (archipelagoHintLock)
+            {
+                archipelagoHintEntries.Clear();
+
+                archipelagoHintEntries.AddRange(
+                    formattedEntries
+                );
+
+                archipelagoHintHistoryVersion++;
+            }
+        }
+
+        public static List<string> GetArchipelagoHintEntries()
+        {
+            lock (archipelagoHintLock)
+            {
+                return new List<string>(
+                    archipelagoHintEntries
+                );
+            }
+        }
+
+
+        public static int GetArchipelagoHintHistoryVersion()
+        {
+            lock (archipelagoHintLock)
+            {
+                return archipelagoHintHistoryVersion;
+            }
+        }
+
+
+        public static void ClearArchipelagoHintHistory()
+        {
+            lock (archipelagoHintLock)
+            {
+                archipelagoHintEntries.Clear();
+
+                archipelagoHintHistoryVersion++;
+            }
+        }
+
+        public static string FormatArchipelagoHint(
+            Hint hint)
+        {
+            if (hint == null)
+                return "";
+
+            ArchipelagoSession apSession =
+                session as ArchipelagoSession;
+
+            if (apSession == null)
+            {
+                return
+                    (hint.Found
+                        ? "<color=#6BE675>FOUND</color>"
+                        : "NOT FOUND") +
+                    ": Item " +
+                    hint.ItemId +
+                    "\nLocation: " +
+                    hint.LocationId;
+            }
+
+
+            // -------------------------------------------------
+            // Player information
+            // -------------------------------------------------
+
+            PlayerInfo receivingPlayer =
+                apSession.Players.GetPlayerInfo(
+                    hint.ReceivingPlayer
+                );
+
+            PlayerInfo findingPlayer =
+                apSession.Players.GetPlayerInfo(
+                    hint.FindingPlayer
+                );
+
+
+            string receivingPlayerName =
+                apSession.Players.GetPlayerAlias(
+                    hint.ReceivingPlayer
+                );
+
+            if (string.IsNullOrEmpty(
+                    receivingPlayerName))
+            {
+                receivingPlayerName =
+                    "Player " +
+                    hint.ReceivingPlayer;
+            }
+
+
+            string findingPlayerName =
+                apSession.Players.GetPlayerAlias(
+                    hint.FindingPlayer
+                );
+
+            if (string.IsNullOrEmpty(
+                    findingPlayerName))
+            {
+                findingPlayerName =
+                    "Player " +
+                    hint.FindingPlayer;
+            }
+
+
+            // -------------------------------------------------
+            // Resolve the item using the receiving player's game.
+            // -------------------------------------------------
+
+            string itemGame =
+                receivingPlayer != null
+                    ? receivingPlayer.Game
+                    : null;
+
+            string itemName = null;
+
+            if (!string.IsNullOrEmpty(
+                    itemGame))
+            {
+                itemName =
+                    apSession.Items.GetItemName(
+                        hint.ItemId,
+                        itemGame
+                    );
+            }
+
+            if (string.IsNullOrEmpty(
+                    itemName))
+            {
+                itemName =
+                    "Item " +
+                    hint.ItemId;
+            }
+
+
+            // -------------------------------------------------
+            // Resolve the location using the finding player's game.
+            // -------------------------------------------------
+
+            string locationGame =
+                findingPlayer != null
+                    ? findingPlayer.Game
+                    : null;
+
+            string locationName = null;
+
+            if (!string.IsNullOrEmpty(
+                    locationGame))
+            {
+                locationName =
+                    apSession.Locations
+                        .GetLocationNameFromId(
+                            hint.LocationId,
+                            locationGame
+                        );
+            }
+
+            if (string.IsNullOrEmpty(
+                    locationName))
+            {
+                locationName =
+                    "Location " +
+                    hint.LocationId;
+            }
+
+            // -------------------------------------------------
+            // Display
+            // -------------------------------------------------
+
+            string foundText =
+                hint.Found
+                    ? "<color=#6BE675>FOUND</color>"
+                    : "NOT FOUND";
+
+            string result =
+                foundText +
+                ": " +
+                itemName +
+                "  |  " +
+                locationName;
+
+
+            // Only show routing when the item crosses players.
+            if (hint.FindingPlayer !=
+                hint.ReceivingPlayer)
+            {
+                result +=
+                    "  |  " +
+                    findingPlayerName +
+                    " -> " +
+                    receivingPlayerName;
+            }
+
+
+            // Only append entrance information when present.
+            if (!string.IsNullOrEmpty(
+                    hint.Entrance))
+            {
+                result +=
+                    "  |  Via: " +
+                    hint.Entrance;
+            }
+
+            return result;
+        }
+
+        private static bool EnsureArchipelagoRecentItemsHud()
+        {
+            if (archipelagoRecentItemsHudRoot != null &&
+                archipelagoRecentItemCards.Count ==
+                    ArchipelagoRecentItemsMaxVisible)
+            {
+                return true;
+            }
+
+            if (UIManager.Instance == null)
+                return false;
+
+            UI_SystemMessage systemMessage =
+                UIManager.Instance
+                    .GetElement<UI_SystemMessage>();
+
+            if (systemMessage == null ||
+                systemMessage.transform.parent == null)
+            {
+                return false;
+            }
+
+            Transform uiParent =
+                systemMessage.transform.parent;
+
+            // If the previous scene destroyed the old UI,
+            // throw away the stale card references.
+            archipelagoRecentItemCards.Clear();
+
+            archipelagoRecentItemsHudRoot =
+                new GameObject(
+                    "ArchipelagoRecentItemsHUD",
+                    typeof(RectTransform)
+                );
+
+            RectTransform rootRect =
+                archipelagoRecentItemsHudRoot
+                    .GetComponent<RectTransform>();
+
+            rootRect.SetParent(
+                uiParent,
+                false
+            );
+
+            rootRect.anchorMin =
+                new Vector2(1f, 1f);
+
+            rootRect.anchorMax =
+                new Vector2(1f, 1f);
+
+            rootRect.pivot =
+                new Vector2(1f, 1f);
+
+            rootRect.sizeDelta =
+                new Vector2(
+                    150f,
+                    1f
+                );
+
+            // Position below the quest display
+            rootRect.anchoredPosition =
+                new Vector2(
+                    -12f,
+                    -132f
+                );
+
+            for (int i = 0;
+                 i < ArchipelagoRecentItemsMaxVisible;
+                 i++)
+            {
+                GameObject cardObject =
+                    new GameObject(
+                        "RecentItemCard_" + i,
+                        typeof(RectTransform),
+                        typeof(Image)
+                    );
+
+                RectTransform cardRect =
+                    cardObject.GetComponent<RectTransform>();
+
+                cardRect.SetParent(
+                    rootRect,
+                    false
+                );
+
+                cardRect.anchorMin =
+                    new Vector2(1f, 1f);
+
+                cardRect.anchorMax =
+                    new Vector2(1f, 1f);
+
+                cardRect.pivot =
+                    new Vector2(1f, 1f);
+
+                cardRect.sizeDelta =
+                    new Vector2(
+                        150f,
+                        20f
+                    );
+
+                Image background =
+                    cardObject.GetComponent<Image>();
+
+                background.raycastTarget = false;
+
+
+                // ---------------------------------------------
+                // Main line
+                // ---------------------------------------------
+
+                GameObject mainTextObject =
+                    new GameObject(
+                        "MainText",
+                        typeof(RectTransform),
+                        typeof(TextMeshProUGUI)
+                    );
+
+                RectTransform mainRect =
+                    mainTextObject.GetComponent<RectTransform>();
+
+                mainRect.SetParent(
+                    cardRect,
+                    false
+                );
+
+                mainRect.anchorMin =
+                    new Vector2(0f, 1f);
+
+                mainRect.anchorMax =
+                    new Vector2(1f, 1f);
+
+                mainRect.pivot =
+                    new Vector2(0.5f, 1f);
+
+                TextMeshProUGUI mainText =
+                    mainTextObject
+                        .GetComponent<TextMeshProUGUI>();
+
+                mainText.fontSize = 8f;
+
+                mainText.alignment =
+                    TextAlignmentOptions.TopRight;
+
+                mainText.enableWordWrapping = true;
+                mainText.richText = false;
+                mainText.raycastTarget = false;
+
+
+                // ---------------------------------------------
+                // Source line
+                // ---------------------------------------------
+
+                GameObject sourceTextObject =
+                    new GameObject(
+                        "SourceText",
+                        typeof(RectTransform),
+                        typeof(TextMeshProUGUI)
+                    );
+
+                RectTransform sourceRect =
+                    sourceTextObject
+                        .GetComponent<RectTransform>();
+
+                sourceRect.SetParent(
+                    cardRect,
+                    false
+                );
+
+                sourceRect.anchorMin =
+                    new Vector2(0f, 1f);
+
+                sourceRect.anchorMax =
+                    new Vector2(1f, 1f);
+
+                sourceRect.pivot =
+                    new Vector2(0.5f, 1f);
+
+                TextMeshProUGUI sourceText =
+                    sourceTextObject
+                        .GetComponent<TextMeshProUGUI>();
+
+                sourceText.fontSize = 6.5f;
+
+                sourceText.alignment =
+                    TextAlignmentOptions.TopRight;
+
+                sourceText.enableWordWrapping = true;
+                sourceText.richText = false;
+                sourceText.raycastTarget = false;
+
+
+                ArchipelagoRecentItemCard card =
+                    new ArchipelagoRecentItemCard
+                    {
+                        Root = cardObject,
+                        Rect = cardRect,
+                        Background = background,
+                        MainText = mainText,
+                        SourceText = sourceText
+                    };
+
+                cardObject.SetActive(false);
+
+                archipelagoRecentItemCards.Add(card);
+            }
+
+            archipelagoRecentItemsHudRoot.SetActive(false);
+
+            return true;
+        }
+
+        private static void UpdateArchipelagoRecentItemsHud()
+        {
+            bool changed = false;
+
+            bool suppressHud =
+                ShouldSuppressArchipelagoRecentItemsHud();
+
+
+            // -------------------------------------------------
+            // Reset / add new notifications
+            // -------------------------------------------------
+
+            lock (archipelagoRecentItemsLock)
+            {
+                if (archipelagoRecentItemsResetPending)
+                {
+                    pendingArchipelagoRecentItems.Clear();
+                    visibleArchipelagoRecentItems.Clear();
+
+                    archipelagoRecentItemsResetPending = false;
+
+                    changed = true;
+                }
+
+
+                // Do not start new Recent Item notifications
+                // while the HUD is temporarily hidden.
+                //
+                // They stay queued and will appear normally
+                // once the suppressed UI closes.
+                if (!suppressHud)
+                {
+                    while (pendingArchipelagoRecentItems.Count > 0)
+                    {
+                        ArchipelagoRecentItemNotification notification =
+                            pendingArchipelagoRecentItems.Dequeue();
+
+                        notification.ExpiresAt =
+                            Time.unscaledTime +
+                            ArchipelagoRecentItemLifetime;
+
+                        // Newest first.
+                        visibleArchipelagoRecentItems.Insert(
+                            0,
+                            notification
+                        );
+
+                        while (visibleArchipelagoRecentItems.Count >
+                               ArchipelagoRecentItemsMaxVisible)
+                        {
+                            visibleArchipelagoRecentItems.RemoveAt(
+                                visibleArchipelagoRecentItems.Count - 1
+                            );
+                        }
+
+                        changed = true;
+                    }
+                }
+            }
+
+
+            // -------------------------------------------------
+            // Temporarily hidden
+            // -------------------------------------------------
+
+            if (suppressHud)
+            {
+                // Pause the lifetime of anything that was already
+                // visible so it can continue afterward instead of
+                // expiring behind the Destiny Inscription.
+                for (int i = 0;
+                     i < visibleArchipelagoRecentItems.Count;
+                     i++)
+                {
+                    visibleArchipelagoRecentItems[i].ExpiresAt +=
+                        Time.unscaledDeltaTime;
+                }
+
+                if (archipelagoRecentItemsHudRoot != null)
+                {
+                    archipelagoRecentItemsHudRoot.SetActive(
+                        false
+                    );
+                }
+
+                return;
+            }
+
+
+            // -------------------------------------------------
+            // Remove expired notifications
+            // -------------------------------------------------
+
+            for (int i =
+                    visibleArchipelagoRecentItems.Count - 1;
+                 i >= 0;
+                 i--)
+            {
+                if (Time.unscaledTime >=
+                    visibleArchipelagoRecentItems[i].ExpiresAt)
+                {
+                    visibleArchipelagoRecentItems.RemoveAt(i);
+
+                    changed = true;
+                }
+            }
+
+
+            // -------------------------------------------------
+            // Nothing visible
+            // -------------------------------------------------
+
+            if (visibleArchipelagoRecentItems.Count == 0)
+            {
+                if (archipelagoRecentItemsHudRoot != null)
+                {
+                    archipelagoRecentItemsHudRoot.SetActive(false);
+                }
+
+                return;
+            }
+
+
+            // -------------------------------------------------
+            // Make sure UI exists
+            // -------------------------------------------------
+
+            if (!EnsureArchipelagoRecentItemsHud())
+                return;
+
+            archipelagoRecentItemsHudRoot.SetActive(true);
+
+            if (!changed)
+                return;
+
+
+            // -------------------------------------------------
+            // Build separate cards
+            // -------------------------------------------------
+
+            const float cardWidth = 150f;
+            const float textWidth = 140f;
+
+            const float topPadding = 3f;
+            const float bottomPadding = 3f;
+            const float textGap = 1f;
+            const float cardGap = 3f;
+
+            float yOffset = 0f;
+
+            for (int i = 0;
+                 i < archipelagoRecentItemCards.Count;
+                 i++)
+            {
+                ArchipelagoRecentItemCard card =
+                    archipelagoRecentItemCards[i];
+
+                if (i >= visibleArchipelagoRecentItems.Count)
+                {
+                    card.Root.SetActive(false);
+                    continue;
+                }
+
+                ArchipelagoRecentItemNotification notification =
+                    visibleArchipelagoRecentItems[i];
+
+                card.Root.SetActive(true);
+
+                card.MainText.text =
+                    notification.FirstLine ?? "";
+
+                card.SourceText.text =
+                    notification.SecondLine ?? "";
+
+
+                // ---------------------------------------------
+                // Measure main text
+                // ---------------------------------------------
+
+                Vector2 mainPreferred =
+                    card.MainText.GetPreferredValues(
+                        card.MainText.text,
+                        textWidth,
+                        0f
+                    );
+
+                float mainHeight =
+                    mainPreferred.y;
+
+
+                // ---------------------------------------------
+                // Measure source text
+                // ---------------------------------------------
+
+                float sourceHeight = 0f;
+
+                if (!string.IsNullOrEmpty(
+                        card.SourceText.text))
+                {
+                    Vector2 sourcePreferred =
+                        card.SourceText.GetPreferredValues(
+                            card.SourceText.text,
+                            textWidth,
+                            0f
+                        );
+
+                    sourceHeight =
+                        sourcePreferred.y;
+                }
+
+
+                // ---------------------------------------------
+                // Card height
+                // ---------------------------------------------
+
+                float cardHeight =
+                    topPadding +
+                    mainHeight +
+                    (
+                        sourceHeight > 0f
+                            ? textGap + sourceHeight
+                            : 0f
+                    ) +
+                    bottomPadding;
+
+
+                // ---------------------------------------------
+                // Card position
+                // ---------------------------------------------
+
+                card.Rect.sizeDelta =
+                    new Vector2(
+                        cardWidth,
+                        cardHeight
+                    );
+
+                card.Rect.anchoredPosition =
+                    new Vector2(
+                        0f,
+                        -yOffset
+                    );
+
+
+                // ---------------------------------------------
+                // Main text position
+                // ---------------------------------------------
+
+                RectTransform mainRect =
+                    card.MainText.rectTransform;
+
+                mainRect.sizeDelta =
+                    new Vector2(
+                        -10f,
+                        mainHeight
+                    );
+
+                mainRect.anchoredPosition =
+                    new Vector2(
+                        0f,
+                        -topPadding
+                    );
+
+
+                // ---------------------------------------------
+                // Source text position
+                // ---------------------------------------------
+
+                RectTransform sourceRect =
+                    card.SourceText.rectTransform;
+
+                sourceRect.sizeDelta =
+                    new Vector2(
+                        -10f,
+                        sourceHeight
+                    );
+
+                sourceRect.anchoredPosition =
+                    new Vector2(
+                        0f,
+                        -(
+                            topPadding +
+                            mainHeight +
+                            textGap
+                        )
+                    );
+
+
+                // ---------------------------------------------
+                // Subtle visual priority
+                // ---------------------------------------------
+
+                float backgroundAlpha;
+                float mainAlpha;
+                float sourceAlpha;
+
+                if (i == 0)
+                {
+                    backgroundAlpha = 0.42f;
+                    mainAlpha = 1f;
+                    sourceAlpha = 0.78f;
+                }
+                else if (i == 1)
+                {
+                    backgroundAlpha = 0.30f;
+                    mainAlpha = 0.82f;
+                    sourceAlpha = 0.62f;
+                }
+                else
+                {
+                    backgroundAlpha = 0.22f;
+                    mainAlpha = 0.68f;
+                    sourceAlpha = 0.50f;
+                }
+
+                card.Background.color =
+                    new UnityEngine.Color(
+                        0f,
+                        0f,
+                        0f,
+                        backgroundAlpha
+                    );
+
+                card.MainText.color =
+                    new UnityEngine.Color(
+                        1f,
+                        1f,
+                        1f,
+                        mainAlpha
+                    );
+
+                card.SourceText.color =
+                    new UnityEngine.Color(
+                        0.85f,
+                        0.85f,
+                        0.85f,
+                        sourceAlpha
+                    );
+
+
+                // Next card goes underneath this one.
+                yOffset +=
+                    cardHeight +
+                    cardGap;
+            }
+        }
 
         public static async Task<bool> ConnectToArchipelago(
             string host,
@@ -3636,26 +4981,24 @@ namespace SephiriaAPRandomizer
             string slotName,
             string password)
         {
-            ArchipelagoSession apSession =
-                ArchipelagoSessionFactory.CreateSession(host, port);
+            ArchipelagoSession apSession = ArchipelagoSessionFactory.CreateSession(host, port);
 
             session = apSession;
+
+            apSession.MessageLog.OnMessageReceived +=
+                HandleArchipelagoMessage;
 
             apSession.Items.ItemReceived += helper =>
             {
                 while (helper.Any())
                 {
-                    var item = helper.DequeueItem();
-
-                    MelonLogger.Msg(
-                        $"Received item: {item.ItemName} " +
-                        $"from player {item.Player} " +
-                        $"at location {item.LocationName} "
-                    );
+                    helper.DequeueItem();
                 }
 
                 QueueHardModeSync();
                 QueuePermanentItemSync();
+                QueueTrapSync();
+                QueueArchipelagoCintamaniSync();
             };
 
             MelonLogger.Msg("Connecting to Archipelago...");
@@ -3678,6 +5021,41 @@ namespace SephiriaAPRandomizer
                 disconnectMessageShown = false;
                 var loginSuccess = (LoginSuccessful)result;
 
+                // =================================================
+                // Persistent AP hints
+                // =================================================
+
+                ClearArchipelagoHintHistory();
+
+                try
+                {
+                    apSession.DataStorage.TrackHints(
+                        hints =>
+                        {
+                            // Ignore a callback from an old session
+                            // after reconnecting to a new one.
+                            if (!object.ReferenceEquals(
+                                    session,
+                                    apSession))
+                            {
+                                return;
+                            }
+
+                            ReplaceArchipelagoHints(
+                                hints
+                            );
+                        },
+                        true
+                    );
+                }
+                catch (Exception ex)
+                {
+                    MelonLogger.Warning(
+                        "[AP Hints] Could not start hint tracking: " +
+                        ex.Message
+                    );
+                }
+
                 GoalChapter =
                     Convert.ToInt32(loginSuccess.SlotData["goal_chapter"]);
 
@@ -3689,6 +5067,59 @@ namespace SephiriaAPRandomizer
                 UniqueWeaponsRequired =
                     Convert.ToBoolean(
                         loginSuccess.SlotData["unique_weapons_required"]
+                    );
+
+                RandomizeAnvilUnlocks =
+                    Convert.ToBoolean(
+                        loginSuccess.SlotData[
+                            "randomize_anvil_unlocks"
+                        ]
+                    );
+
+                StartingCintamaniStonePoolCount =
+                    loginSuccess.SlotData.ContainsKey(
+                        "starting_cintamani_stones"
+                    )
+                        ? Convert.ToInt32(
+                            loginSuccess.SlotData[
+                                "starting_cintamani_stones"
+                            ]
+                        )
+                        : 0;
+
+                StartingCintamaniStonePoolCount =
+                    Math.Max(
+                        0,
+                        Math.Min(
+                            2,
+                            StartingCintamaniStonePoolCount
+                        )
+                    );
+
+                TrapsEnabled =
+                    loginSuccess.SlotData.ContainsKey(
+                        "traps"
+                    ) &&
+                    Convert.ToBoolean(
+                        loginSuccess.SlotData[
+                            "traps"
+                        ]
+                    );
+
+                SapphireMultiplier =
+                    Convert.ToInt32(
+                        loginSuccess.SlotData[
+                            "sapphire_multiplier"
+                        ]
+                    );
+
+                SapphireMultiplier =
+                    Math.Max(
+                        1,
+                        Math.Min(
+                            10,
+                            SapphireMultiplier
+                        )
                     );
 
                 StartingCostumeId =
@@ -3770,11 +5201,33 @@ namespace SephiriaAPRandomizer
                     $"Unique Weapons {UniqueWeaponsRequired}"
                 );
 
+                DeathLinkEnabled =
+                    Convert.ToBoolean(
+                        loginSuccess.SlotData["death_link"]
+                    );
+
+                currentArchipelagoSlotName =
+                    slotName;
+
+                ConfigureArchipelagoDeathLink(
+                    apSession
+                );
+
+                MelonLogger.Msg(
+                    "[AP DeathLink] " +
+                    (DeathLinkEnabled
+                        ? "Enabled."
+                        : "Disabled.")
+                );
+
                 await ScoutArchipelagoSephiriteItems(apSession);
                 await ScoutArchipelagoCostumeMissionItems(apSession);
+                await ScoutArchipelagoDestinyInscriptionItems(apSession);
 
                 QueueHardModeSync();
                 QueuePermanentItemSync();
+                QueueTrapSync();
+                QueueArchipelagoCintamaniSync();
 
                 return true;
             }
@@ -3791,6 +5244,8 @@ namespace SephiriaAPRandomizer
             ArchipelagoSession apSession = session as ArchipelagoSession;
 
             ArchipelagoSephiriteTooltipVisualPatch.RestoreAllTooltipStates();
+
+            ShutdownArchipelagoDeathLink();
 
             session = null;
 
@@ -3826,6 +5281,17 @@ namespace SephiriaAPRandomizer
             permanentItemSyncPending = true;
         }
 
+        private static void QueueTrapSync()
+        {
+            if (!IsArchipelagoSave)
+                return;
+
+            if (!TrapsEnabled)
+                return;
+
+            trapSyncPending = true;
+        }
+
         public static event Action ArchipelagoPermanentRewardsChanged;
 
         private static void SetSephiritePanelGroupActive(
@@ -3852,8 +5318,29 @@ namespace SephiriaAPRandomizer
             }
         }
 
+        private static bool ShouldSuppressArchipelagoRecentItemsHud()
+        {
+            if (!IsArchipelagoSave)
+                return false;
+
+            // Hide Recent Items while the Destiny
+            // Inscription interface is open.
+            if (ArchipelagoTreeShopModeController
+                .IsTreeShopOpen)
+            {
+                return true;
+            }
+
+            return false;
+        }
+
         public override void OnUpdate()
         {
+            UpdateArchipelagoRecentItemsHud();
+            UpdateArchipelagoDeathLink();
+            UpdateArchipelagoTraps();
+            UpdateArchipelagoCintamani();
+
             if (IsArchipelagoSave)
             {
                 bool connected =
@@ -3961,10 +5448,15 @@ namespace SephiriaAPRandomizer
 
             if (weaponStandSyncPending)
             {
-                if (RefreshArchipelagoWeaponStands())
-                {
-                    weaponStandSyncPending = false;
-                }
+                // This is a one-shot refresh request.
+                //
+                // If the town weapon stands are not loaded yet,
+                // do not retry Resources.FindObjectsOfTypeAll every frame.
+                // TownWeaponStand.Awake will queue another refresh when
+                // the stands actually load.
+                weaponStandSyncPending = false;
+
+                RefreshArchipelagoWeaponStands();
             }
 
 
@@ -3974,8 +5466,6 @@ namespace SephiriaAPRandomizer
             hardModeSyncPending = false;
 
             ApplyArchipelagoHardModeState();
-
-            LogArchipelagoHardModeRuntimeState();
         }
 
         private static void ApplyArchipelagoHardModeState()
@@ -4107,6 +5597,7 @@ namespace SephiriaAPRandomizer
             if (apSession == null)
                 return;
 
+            SynchronizeArchipelagoSapphireFiller(apSession);
             SynchronizeArchipelagoTalentPoints(apSession);
             SynchronizeArchipelagoPotionStorage(apSession);
             SynchronizeArchipelagoStartingPotion(apSession);
@@ -4115,6 +5606,7 @@ namespace SephiriaAPRandomizer
             SynchronizeArchipelagoCostumeDyeing(apSession);
             SynchronizeArchipelagoFruitSkewer(apSession);
             SynchronizeArchipelagoWeapons(apSession);
+            SynchronizeArchipelagoDestinyUpgrades(apSession);
             SynchronizeArchipelagoPermanentRewards(apSession);
             SynchronizeArchipelagoMissionUnlocks(apSession);
 
@@ -4183,7 +5675,7 @@ namespace SephiriaAPRandomizer
                             costumeId
                         );
 
-                        MelonLogger.Msg(
+                        APDebug.Log(
                             $"[AP Costume] {costumeId} = True"
                         );
                     }
@@ -4194,7 +5686,7 @@ namespace SephiriaAPRandomizer
                             costumeId
                         );
 
-                        MelonLogger.Msg(
+                        APDebug.Log(
                             $"[AP Costume] {costumeId} = False"
                         );
                     }
@@ -4351,20 +5843,13 @@ namespace SephiriaAPRandomizer
                             );
                         }
 
-                        MelonLogger.Msg(
+                        APDebug.Log(
                             $"[AP Costume] Runtime restored saved costume: " +
                             $"{equippedCostume}"
                         );
                     }
                 }
             }
-
-            MelonLogger.Msg(
-                $"[AP Costume] Ownership synchronized. " +
-                $"Owned={ownedCostumeIds.Count}, " +
-                $"Starting={StartingCostumeId}, " +
-                $"RuntimeReady={CombatManager.Instance != null}"
-            );
         }
 
         public static bool TryGetArchipelagoBossRewardInfo(
@@ -4643,7 +6128,7 @@ namespace SephiriaAPRandomizer
 
                 if (changed)
                 {
-                    MelonLogger.Msg(
+                    APDebug.Log(
                         $"[AP Permanent Reward] " +
                         $"{apItemName} = {ownsReward}"
                     );
@@ -4678,14 +6163,9 @@ namespace SephiriaAPRandomizer
                 "WhiteWolf",
                 "WizardRabbit",
                 "Bird",
-                "Crocodile",
-                "Deer",
-                "Luck",
-                "Squirrel",
                 "Turtle",
                 "ForestCat",
                 "Ghost",
-                "Seren",
                 "Skeleton",
                 "Bat"
             };
@@ -4699,8 +6179,24 @@ namespace SephiriaAPRandomizer
             if (SaveManager.Current == null)
                 return;
 
+            // Remaining AP costume missions need their
+            // vanilla trackers available.
             foreach (string costumeId
                 in archipelagoCostumeMissionLocations.Keys)
+            {
+                SaveManager.Current.SetBool(
+                    "Costume_Unlocked_" + costumeId,
+                    false
+                );
+            }
+
+            // These missions were removed from AP, but their
+            // vanilla completed flags must also stay false.
+            //
+            // A true flag causes Sephiria to directly unlock
+            // the costume instead of creating a tracker.
+            foreach (string costumeId
+                in removedArchipelagoCostumeMissionIds)
             {
                 SaveManager.Current.SetBool(
                     "Costume_Unlocked_" + costumeId,
@@ -4865,6 +6361,588 @@ namespace SephiriaAPRandomizer
                         )
                 )
             );
+        }
+
+        private static readonly Dictionary<int, int>
+            archipelagoReceivedTreeShopCounts =
+                new Dictionary<int, int>();
+
+        private static int
+            archipelagoReceivedTreeShopCachedItemTotal = -1;
+
+        private static EWeaponType?
+            archipelagoReceivedTreeShopCachedStartingWeapon = null;
+
+
+        private static int GetReceivedItemCount(
+            Dictionary<string, int> receivedItems,
+            string itemName)
+        {
+            int count;
+
+            if (receivedItems.TryGetValue(
+                    itemName,
+                    out count))
+            {
+                return count;
+            }
+
+            return 0;
+        }
+
+
+        private static int ClampReceivedTreeCount(
+            int count,
+            int maximum)
+        {
+            return Math.Min(
+                Math.Max(count, 0),
+                maximum
+            );
+        }
+
+
+        private static bool HasReceivedWeapon(
+            Dictionary<string, int> receivedItems,
+            EWeaponType weaponType,
+            string itemName)
+        {
+            // The randomized starting weapon is owned even
+            // though it was not placed in the AP item pool.
+            if (StartingWeaponType.HasValue &&
+                StartingWeaponType.Value == weaponType)
+            {
+                return true;
+            }
+
+            return GetReceivedItemCount(
+                receivedItems,
+                itemName
+            ) > 0;
+        }
+
+
+        private static void
+            RebuildArchipelagoReceivedTreeShopCounts(
+                ArchipelagoSession apSession)
+        {
+            archipelagoReceivedTreeShopCounts.Clear();
+
+            Dictionary<string, int> receivedItems =
+                new Dictionary<string, int>(
+                    StringComparer.Ordinal
+                );
+
+            foreach (var receivedItem
+                in apSession.Items.AllItemsReceived)
+            {
+                if (receivedItem == null ||
+                    string.IsNullOrEmpty(
+                        receivedItem.ItemName))
+                {
+                    continue;
+                }
+
+                int currentCount;
+
+                receivedItems.TryGetValue(
+                    receivedItem.ItemName,
+                    out currentCount
+                );
+
+                receivedItems[
+                    receivedItem.ItemName
+                ] = currentCount + 1;
+            }
+
+
+            // =================================================
+            // Normal Destiny Inscription upgrades
+            // =================================================
+
+            archipelagoReceivedTreeShopCounts[0] =
+                ClampReceivedTreeCount(
+                    GetReceivedItemCount(
+                        receivedItems,
+                        "Tablet Unlock"
+                    ),
+                    1
+                );
+
+            archipelagoReceivedTreeShopCounts[9] =
+                ClampReceivedTreeCount(
+                    GetReceivedItemCount(
+                        receivedItems,
+                        "Dice Acquisition"
+                    ),
+                    1
+                );
+
+            archipelagoReceivedTreeShopCounts[10] =
+                ClampReceivedTreeCount(
+                    GetReceivedItemCount(
+                        receivedItems,
+                        "Seed Money"
+                    ),
+                    2
+                );
+
+            archipelagoReceivedTreeShopCounts[11] =
+                ClampReceivedTreeCount(
+                    GetReceivedItemCount(
+                        receivedItems,
+                        "Chest of Possibilities"
+                    ),
+                    1
+                );
+
+            archipelagoReceivedTreeShopCounts[14] =
+                ClampReceivedTreeCount(
+                    GetReceivedItemCount(
+                        receivedItems,
+                        "Wishing Fountain Upgrade"
+                    ),
+                    1
+                );
+
+            archipelagoReceivedTreeShopCounts[16] =
+                ClampReceivedTreeCount(
+                    GetReceivedItemCount(
+                        receivedItems,
+                        "Dice Transformation"
+                    ),
+                    1
+                );
+
+            archipelagoReceivedTreeShopCounts[302] =
+                ClampReceivedTreeCount(
+                    GetReceivedItemCount(
+                        receivedItems,
+                        "Level Up Restoration"
+                    ),
+                    4
+                );
+
+            archipelagoReceivedTreeShopCounts[306] =
+                ClampReceivedTreeCount(
+                    GetReceivedItemCount(
+                        receivedItems,
+                        "Extra Experience Drop"
+                    ),
+                    1
+                );
+
+            archipelagoReceivedTreeShopCounts[309] =
+                ClampReceivedTreeCount(
+                    GetReceivedItemCount(
+                        receivedItems,
+                        "MP Regeneration"
+                    ),
+                    2
+                );
+
+
+            // =================================================
+            // Progressive Dice
+            //
+            // 1      -> ID 4
+            // 2-3    -> ID 303
+            // 4-5    -> ID 313
+            // =================================================
+
+            int progressiveDice =
+                ClampReceivedTreeCount(
+                    GetReceivedItemCount(
+                        receivedItems,
+                        "Progressive Dice Upgrade"
+                    ),
+                    5
+                );
+
+            archipelagoReceivedTreeShopCounts[4] =
+                Math.Min(
+                    progressiveDice,
+                    1
+                );
+
+            archipelagoReceivedTreeShopCounts[303] =
+                Math.Min(
+                    Math.Max(
+                        progressiveDice - 1,
+                        0
+                    ),
+                    2
+                );
+
+            archipelagoReceivedTreeShopCounts[313] =
+                Math.Min(
+                    Math.Max(
+                        progressiveDice - 3,
+                        0
+                    ),
+                    2
+                );
+
+
+            // =================================================
+            // Progressive Expanding Pouch
+            //
+            // 1-3 -> ID 304
+            // 4-6 -> ID 305
+            // =================================================
+
+            int progressivePouch =
+                ClampReceivedTreeCount(
+                    GetReceivedItemCount(
+                        receivedItems,
+                        "Progressive Expanding Pouch"
+                    ),
+                    6
+                );
+
+            archipelagoReceivedTreeShopCounts[304] =
+                Math.Min(
+                    progressivePouch,
+                    3
+                );
+
+            archipelagoReceivedTreeShopCounts[305] =
+                Math.Min(
+                    Math.Max(
+                        progressivePouch - 3,
+                        0
+                    ),
+                    3
+                );
+
+
+            // =================================================
+            // Progressive Increase HP
+            //
+            // 1-2 -> ID 311
+            // 3-4 -> ID 312
+            // =================================================
+
+            int progressiveHp =
+                ClampReceivedTreeCount(
+                    GetReceivedItemCount(
+                        receivedItems,
+                        "Progressive Increase HP"
+                    ),
+                    4
+                );
+
+            archipelagoReceivedTreeShopCounts[311] =
+                Math.Min(
+                    progressiveHp,
+                    2
+                );
+
+            archipelagoReceivedTreeShopCounts[312] =
+                Math.Min(
+                    Math.Max(
+                        progressiveHp - 2,
+                        0
+                    ),
+                    2
+                );
+
+
+            // =================================================
+            // Progressive Side Bag
+            //
+            // 1-3 -> ID 314
+            // 4-6 -> ID 315
+            // =================================================
+
+            int progressiveSideBag =
+                ClampReceivedTreeCount(
+                    GetReceivedItemCount(
+                        receivedItems,
+                        "Progressive Side Bag"
+                    ),
+                    6
+                );
+
+            archipelagoReceivedTreeShopCounts[314] =
+                Math.Min(
+                    progressiveSideBag,
+                    3
+                );
+
+            archipelagoReceivedTreeShopCounts[315] =
+                Math.Min(
+                    Math.Max(
+                        progressiveSideBag - 3,
+                        0
+                    ),
+                    3
+                );
+
+
+            // =================================================
+            // Progressive Artifact Unlock
+            //
+            // Bond Artifact remains its own AP item.
+            // =================================================
+
+            int progressiveArtifacts =
+                ClampReceivedTreeCount(
+                    GetReceivedItemCount(
+                        receivedItems,
+                        "Progressive Artifact Unlock"
+                    ),
+                    8
+                );
+
+            int[] progressiveArtifactIds =
+            {
+        1000,
+        1001,
+        1002,
+        1003,
+        1004,
+        1005,
+        1007,
+        1008
+    };
+
+            for (int i = 0;
+                i < progressiveArtifactIds.Length;
+                i++)
+            {
+                archipelagoReceivedTreeShopCounts[
+                    progressiveArtifactIds[i]
+                ] =
+                    progressiveArtifacts > i
+                        ? 1
+                        : 0;
+            }
+
+            archipelagoReceivedTreeShopCounts[1006] =
+                ClampReceivedTreeCount(
+                    GetReceivedItemCount(
+                        receivedItems,
+                        "Bond Artifact Unlock"
+                    ),
+                    1
+                );
+
+            // =================================================
+            // Mission / reward nodes
+            //
+            // For Received Upgrades, show the node as received
+            // when the actual reward represented by that node
+            // has been received, not merely when the mission
+            // itself has been unlocked.
+            // =================================================
+
+            // Rylie's Gift -> Starting Potion
+            archipelagoReceivedTreeShopCounts[1] =
+                ClampReceivedTreeCount(
+                    GetReceivedItemCount(
+                        receivedItems,
+                        "Starting Potion"
+                    ),
+                    1
+                );
+
+            // Magic Workshop -> Potion Storage
+            archipelagoReceivedTreeShopCounts[5] =
+                ClampReceivedTreeCount(
+                    GetReceivedItemCount(
+                        receivedItems,
+                        "Potion Storage"
+                    ),
+                    1
+                );
+
+            // Home Repairs
+            archipelagoReceivedTreeShopCounts[6] =
+                ClampReceivedTreeCount(
+                    GetReceivedItemCount(
+                        receivedItems,
+                        "Mission Unlock: Home Repairs"
+                    ),
+                    1
+                );
+
+            // Terrain Recovery -> Willpower
+            archipelagoReceivedTreeShopCounts[7] =
+                ClampReceivedTreeCount(
+                    GetReceivedItemCount(
+                        receivedItems,
+                        "Willpower Talent Unlock"
+                    ),
+                    1
+                );
+
+            // Basement -> Costume Dyeing
+            archipelagoReceivedTreeShopCounts[13] =
+                ClampReceivedTreeCount(
+                    GetReceivedItemCount(
+                        receivedItems,
+                        "Costume Dyeing"
+                    ),
+                    1
+                );
+
+            // Hide and Seek -> Ingenuity
+            archipelagoReceivedTreeShopCounts[18] =
+                ClampReceivedTreeCount(
+                    GetReceivedItemCount(
+                        receivedItems,
+                        "Ingenuity Talent Unlock"
+                    ),
+                    1
+                );
+
+            // Fruit Skewer -> Fruit Skewer Unlock
+            archipelagoReceivedTreeShopCounts[20] =
+                ClampReceivedTreeCount(
+                    GetReceivedItemCount(
+                        receivedItems,
+                        "Fruit Skewer Unlock"
+                    ),
+                    1
+                );
+
+            // =================================================
+            // Weapon unlocks
+            //
+            // The randomized starting weapon also counts as
+            // received/owned on this page.
+            // =================================================
+
+            archipelagoReceivedTreeShopCounts[2] =
+                HasReceivedWeapon(
+                    receivedItems,
+                    EWeaponType.GreatSword,
+                    "Greatsword Unlock"
+                )
+                    ? 1
+                    : 0;
+
+            archipelagoReceivedTreeShopCounts[3] =
+                HasReceivedWeapon(
+                    receivedItems,
+                    EWeaponType.Dagger,
+                    "Dagger Unlock"
+                )
+                    ? 1
+                    : 0;
+
+            archipelagoReceivedTreeShopCounts[12] =
+                HasReceivedWeapon(
+                    receivedItems,
+                    EWeaponType.Crossbow,
+                    "Crossbow Unlock"
+                )
+                    ? 1
+                    : 0;
+
+            archipelagoReceivedTreeShopCounts[17] =
+                HasReceivedWeapon(
+                    receivedItems,
+                    EWeaponType.Katana,
+                    "Katana Unlock"
+                )
+                    ? 1
+                    : 0;
+
+            archipelagoReceivedTreeShopCounts[19] =
+                HasReceivedWeapon(
+                    receivedItems,
+                    EWeaponType.Staff,
+                    "Staff Unlock"
+                )
+                    ? 1
+                    : 0;
+
+
+            // =================================================
+            // Talent Points
+            //
+            // Each +5 Talent Points receipt completely fills
+            // one vanilla Talent Point node.
+            //
+            // There are 5 visual nodes but 10 AP items, so the
+            // Received Upgrades board is full after receipt #5.
+            // =================================================
+
+            int talentPointReceipts =
+                ClampReceivedTreeCount(
+                    GetReceivedItemCount(
+                        receivedItems,
+                        "+5 Talent Points"
+                    ),
+                    5
+                );
+
+            int[] talentPointNodeIds =
+            {
+                300,
+                301,
+                307,
+                308,
+                310
+            };
+
+            for (int i = 0;
+                i < talentPointNodeIds.Length;
+                i++)
+            {
+                archipelagoReceivedTreeShopCounts[
+                    talentPointNodeIds[i]
+                ] =
+                    talentPointReceipts > i
+                        ? 5
+                        : 0;
+            }
+
+
+            archipelagoReceivedTreeShopCachedItemTotal =
+                apSession.Items.AllItemsReceived.Count();
+
+            archipelagoReceivedTreeShopCachedStartingWeapon =
+                StartingWeaponType;
+        }
+
+
+        public static bool
+            TryGetArchipelagoReceivedTreeShopCount(
+                int treeShopItemId,
+                out int receivedCount)
+        {
+            receivedCount = 0;
+
+            if (!IsArchipelagoSave)
+                return false;
+
+            ArchipelagoSession apSession =
+                session as ArchipelagoSession;
+
+            if (apSession == null)
+                return false;
+
+            int currentItemTotal =
+                apSession.Items.AllItemsReceived.Count();
+
+            if (currentItemTotal !=
+                    archipelagoReceivedTreeShopCachedItemTotal ||
+                StartingWeaponType !=
+                    archipelagoReceivedTreeShopCachedStartingWeapon)
+            {
+                RebuildArchipelagoReceivedTreeShopCounts(
+                    apSession
+                );
+            }
+
+            return archipelagoReceivedTreeShopCounts
+                .TryGetValue(
+                    treeShopItemId,
+                    out receivedCount
+                );
         }
 
         public static bool HasArchipelagoTalentAccess()
@@ -5455,14 +7533,732 @@ namespace SephiriaAPRandomizer
                 }
             }
 
-            MelonLogger.Msg(
-                "[AP Weapons] Ownership synchronized. " +
-                $"Starting={StartingWeaponType.Value}, " +
-                $"Owned={ownedWeapons.Count}"
+            // Only queue the one-time starting weapon setup
+            // if this save has not done it yet.
+            if (!SaveManager.Current.GetBool(
+                    "ArchipelagoStartingWeaponInitialized",
+                    false))
+            {
+                startingWeaponInitializationPending = true;
+            }
+
+            // Do not globally scan weapon stands every time
+            // an unrelated AP item is received.
+            //
+            // saveChanged is true here when this synchronization
+            // actually changed weapon/tutorial state.
+            if (saveChanged)
+            {
+                weaponStandSyncPending = true;
+            }
+        }
+
+        private static void SynchronizeArchipelagoDestinyUpgrades(
+            ArchipelagoSession apSession)
+        {
+            if (apSession == null ||
+                SaveManager.Current == null ||
+                CombatManager.Instance == null ||
+                CombatManager.Instance.CurrentPlayer == null)
+            {
+                return;
+            }
+
+            TreeShopItemStorage treeShopStorage = null;
+
+            if (NetworkServer.active &&
+                CombatManager.Instance != null &&
+                CombatManager.Instance.CurrentPlayer != null)
+            {
+                treeShopStorage =
+                    CombatManager.Instance.CurrentPlayer
+                        .GetComponent<TreeShopItemStorage>();
+            }
+
+            MethodInfo unlockMethod = null;
+
+            if (treeShopStorage != null)
+            {
+                unlockMethod =
+                    AccessTools.Method(
+                        typeof(TreeShopItemStorage),
+                        "Unlock"
+                    );
+            }
+
+            bool saveChanged = false;
+
+            IsSynchronizingArchipelagoDestinyUpgrades = true;
+
+            try
+            {
+                // =================================================
+                // Normal one-node Destiny upgrades
+                // =================================================
+
+                foreach (KeyValuePair<string, int> upgrade
+                    in archipelagoDestinyUpgradeItems)
+                {
+                    string apItemName =
+                        upgrade.Key;
+
+                    int treeShopItemId =
+                        upgrade.Value;
+
+                    int receivedCount =
+                        apSession.Items.AllItemsReceived.Count(
+                            item =>
+                                item != null &&
+                                string.Equals(
+                                    item.ItemName,
+                                    apItemName,
+                                    StringComparison.Ordinal
+                                )
+                        );
+
+                    ApplyArchipelagoDestinyUpgrade(
+                        treeShopStorage,
+                        unlockMethod,
+                        treeShopItemId,
+                        receivedCount,
+                        apItemName,
+                        ref saveChanged
+                    );
+                }
+
+
+                // =================================================
+                // Progressive Destiny upgrades
+                // =================================================
+
+                foreach (KeyValuePair<string, int[]>
+                    progressiveUpgrade
+                    in archipelagoProgressiveDestinyUpgradeItems)
+                {
+                    string apItemName =
+                        progressiveUpgrade.Key;
+
+                    int[] treeShopItemIds =
+                        progressiveUpgrade.Value;
+
+                    int receivedCount =
+                        apSession.Items.AllItemsReceived.Count(
+                            item =>
+                                item != null &&
+                                string.Equals(
+                                    item.ItemName,
+                                    apItemName,
+                                    StringComparison.Ordinal
+                                )
+                        );
+
+                    int remainingCount =
+                        receivedCount;
+
+                    foreach (int treeShopItemId
+                        in treeShopItemIds)
+                    {
+                        TreeShopItemEntity shopItem =
+                            TreeShopItemDatabase.FindById(
+                                treeShopItemId
+                            );
+
+                        if (shopItem == null)
+                        {
+                            MelonLogger.Warning(
+                                $"[AP Destiny Upgrade] Could not find " +
+                                $"TreeShop item {treeShopItemId} " +
+                                $"for {apItemName}."
+                            );
+
+                            continue;
+                        }
+
+                        int desiredCount =
+                            Math.Min(
+                                remainingCount,
+                                shopItem.maxQuantity
+                            );
+
+                        ApplyArchipelagoDestinyUpgrade(
+                            treeShopStorage,
+                            unlockMethod,
+                            treeShopItemId,
+                            desiredCount,
+                            apItemName,
+                            ref saveChanged
+                        );
+
+                        remainingCount =
+                            Math.Max(
+                                remainingCount -
+                                shopItem.maxQuantity,
+                                0
+                            );
+                    }
+                }
+
+
+                if (saveChanged)
+                {
+                    SaveManager.Save(
+                        saveCurrent: true,
+                        saveCurrentRun: false
+                    );
+                }
+            }
+            finally
+            {
+                IsSynchronizingArchipelagoDestinyUpgrades =
+                    false;
+            }
+        }
+
+        private static void UpdateArchipelagoTraps()
+        {
+            if (!trapSyncPending ||
+                !IsArchipelagoSave ||
+                !TrapsEnabled ||
+                SaveManager.Current == null)
+            {
+                return;
+            }
+
+            ArchipelagoSession apSession =
+                session as ArchipelagoSession;
+
+            if (apSession == null ||
+                !apSession.Socket.Connected)
+            {
+                return;
+            }
+
+            if (CombatManager.Instance == null ||
+                CombatManager.Instance.CurrentPlayer == null)
+            {
+                return;
+            }
+
+            PlayerAvatar player =
+                CombatManager.Instance.CurrentPlayer;
+
+            // Do not waste traps in town, while dead,
+            // during cutscenes, or while the game is paused.
+            if (!IsSafeToApplyDeathLink(player))
+                return;
+
+            List<string> receivedTraps =
+                apSession.Items.AllItemsReceived
+                    .Where(item =>
+                        item != null &&
+                        archipelagoTrapItemNames.Contains(
+                            item.ItemName
+                        )
+                    )
+                    .Select(item => item.ItemName)
+                    .ToList();
+
+            int processedCount =
+                SaveManager.Current.GetInt(
+                    ArchipelagoProcessedTrapCountKey,
+                    0
+                );
+
+            if (processedCount < 0)
+            {
+                processedCount = 0;
+            }
+
+            if (processedCount >= receivedTraps.Count)
+            {
+                trapSyncPending = false;
+                return;
+            }
+
+            for (
+                int i = processedCount;
+                i < receivedTraps.Count;
+                i++
+            )
+            {
+                string trapName =
+                    receivedTraps[i];
+
+                if (!ApplyArchipelagoTrap(
+                        player,
+                        trapName))
+                {
+                    // Leave this trap unprocessed.
+                    // We'll try again on a later frame.
+                    return;
+                }
+
+                processedCount++;
+
+                SaveManager.Current.SetInt(
+                    ArchipelagoProcessedTrapCountKey,
+                    processedCount
+                );
+
+                SaveManager.Save(
+                    saveCurrent: true,
+                    saveCurrentRun: false
+                );
+            }
+
+            trapSyncPending = false;
+        }
+
+        private static float GetRandomArchipelagoTrapDuration()
+        {
+            return 20f +
+                (
+                    (float)
+                    archipelagoTrapRandom.NextDouble()
+                    * 10f
+                );
+        }
+
+        private static float ExtendArchipelagoTrapTimer(
+            float currentUntil,
+            float duration)
+        {
+            return Mathf.Max(
+                currentUntil,
+                Time.time
+            ) + duration;
+        }
+
+        private static bool ApplyArchipelagoTrap(
+            PlayerAvatar player,
+            string trapName)
+        {
+            if (player == null)
+                return false;
+
+            float duration =
+                GetRandomArchipelagoTrapDuration();
+
+            switch (trapName)
+            {
+                case "Can't Cast Trap":
+                    cannotCastTrapUntil =
+                        ExtendArchipelagoTrapTimer(
+                            cannotCastTrapUntil,
+                            duration
+                        );
+
+                    SkillController skillController =
+                        player.GetComponent<SkillController>();
+
+                    if (skillController != null)
+                    {
+                        skillController.CastStop();
+                    }
+
+                    break;
+
+                case "Can't Dash Trap":
+                    cannotDashTrapUntil =
+                        ExtendArchipelagoTrapTimer(
+                            cannotDashTrapUntil,
+                            duration
+                        );
+                    break;
+
+                case "Can't Normal Attack Trap":
+                    cannotNormalAttackTrapUntil =
+                        ExtendArchipelagoTrapTimer(
+                            cannotNormalAttackTrapUntil,
+                            duration
+                        );
+                    break;
+
+                case "Flipped Controls Trap":
+                    flippedControlsTrapUntil =
+                        ExtendArchipelagoTrapTimer(
+                            flippedControlsTrapUntil,
+                            duration
+                        );
+                    break;
+
+                case "Bag Shuffle Trap":
+                    if (!TryApplyArchipelagoBagShuffle(
+                            player))
+                    {
+                        return false;
+                    }
+
+                    duration = 0f;
+                    break;
+
+                default:
+                    MelonLogger.Warning(
+                        "[AP Trap] Unknown trap: " +
+                        trapName
+                    );
+
+                    return false;
+            }
+
+            MelonLogger.Warning(
+                "[AP Trap] Activated " +
+                trapName +
+                (
+                    duration > 0f
+                        ? " for " +
+                          duration.ToString("0.0") +
+                          " seconds."
+                        : "."
+                )
             );
 
-            startingWeaponInitializationPending = true;
-            weaponStandSyncPending = true;
+            return true;
+        }
+
+        public static bool IsCantCastTrapActive
+        {
+            get
+            {
+                return
+                    IsArchipelagoSave &&
+                    TrapsEnabled &&
+                    Time.time < cannotCastTrapUntil;
+            }
+        }
+
+        public static bool IsCantDashTrapActive
+        {
+            get
+            {
+                return
+                    IsArchipelagoSave &&
+                    TrapsEnabled &&
+                    Time.time < cannotDashTrapUntil;
+            }
+        }
+
+        public static bool IsCantNormalAttackTrapActive
+        {
+            get
+            {
+                return
+                    IsArchipelagoSave &&
+                    TrapsEnabled &&
+                    Time.time <
+                        cannotNormalAttackTrapUntil;
+            }
+        }
+
+        public static bool IsFlippedControlsTrapActive
+        {
+            get
+            {
+                return
+                    IsArchipelagoSave &&
+                    TrapsEnabled &&
+                    Time.time <
+                        flippedControlsTrapUntil;
+            }
+        }
+
+        private static bool TryApplyArchipelagoBagShuffle(
+            PlayerAvatar player)
+        {
+            if (player == null ||
+                player.Inventory == null ||
+                !NetworkServer.active)
+            {
+                return false;
+            }
+
+            GridInventory inventory =
+                player.Inventory;
+
+            MethodInfo captureMethod =
+                AccessTools.Method(
+                    typeof(GridInventory),
+                    "CaptureAutoArrangeState"
+                );
+
+            MethodInfo applyMethod =
+                AccessTools.Method(
+                    typeof(GridInventory),
+                    "ApplyAutoArrangeState"
+                );
+
+            if (captureMethod == null ||
+                applyMethod == null)
+            {
+                MelonLogger.Warning(
+                    "[AP Trap] Could not find " +
+                    "GridInventory shuffle methods."
+                );
+
+                return false;
+            }
+
+            object state =
+                captureMethod.Invoke(
+                    inventory,
+                    null
+                );
+
+            if (state == null)
+                return false;
+
+            FieldInfo slotsField =
+                AccessTools.Field(
+                    state.GetType(),
+                    "slots"
+                );
+
+            IList slots =
+                slotsField?.GetValue(
+                    state
+                ) as IList;
+
+            if (slots == null)
+                return false;
+
+            // Nothing meaningful to shuffle.
+            if (slots.Count <= 1)
+                return true;
+
+            for (
+                int i = slots.Count - 1;
+                i > 0;
+                i--
+            )
+            {
+                int j =
+                    archipelagoTrapRandom.Next(
+                        i + 1
+                    );
+
+                object temp =
+                    slots[i];
+
+                slots[i] =
+                    slots[j];
+
+                slots[j] =
+                    temp;
+            }
+
+            using (
+                new GridInventory.Permission(
+                    inventory
+                )
+            )
+            {
+                applyMethod.Invoke(
+                    inventory,
+                    new object[]
+                    {
+                state
+                    }
+                );
+            }
+
+            MelonLogger.Msg(
+                "[AP Trap] Inventory shuffled."
+            );
+
+            return true;
+        }
+
+        private static void SynchronizeArchipelagoSapphireFiller(
+            ArchipelagoSession apSession)
+        {
+            if (!IsArchipelagoSave)
+                return;
+
+            if (SaveManager.Current == null)
+                return;
+
+            if (apSession == null)
+                return;
+
+            if (CombatManager.Instance == null ||
+                CombatManager.Instance.CurrentPlayer == null)
+            {
+                return;
+            }
+
+            PlayerLocalDataStorage data =
+                CombatManager.Instance.CurrentPlayer
+                    .GetComponent<PlayerLocalDataStorage>();
+
+            if (data == null)
+                return;
+
+
+            int receivedCount =
+                apSession.Items.AllItemsReceived.Count(
+                    item =>
+                        item != null &&
+                        string.Equals(
+                            item.ItemName,
+                            ArchipelagoSapphireFillerItemName,
+                            StringComparison.Ordinal
+                        )
+                );
+
+            int processedCount =
+                SaveManager.Current.GetInt(
+                    ArchipelagoProcessedSapphireFillerCountKey,
+                    0
+                );
+
+
+            // Nothing new to award.
+            if (receivedCount <= processedCount)
+                return;
+
+
+            int newItemCount =
+                receivedCount - processedCount;
+
+            int sapphireToGive =
+                newItemCount * 5;
+
+
+            // Use Sephiria's normal permanent Sapphire update
+            // pattern from FunctionNode_GiveSapphire.
+            data.Networksapphire =
+                data.sapphire +
+                sapphireToGive;
+
+            SaveManager.Current.SetInt(
+                "Sapphire",
+                data.sapphire
+            );
+
+            // Record exactly how many AP filler items have
+            // already been processed for this save.
+            SaveManager.Current.SetInt(
+                ArchipelagoProcessedSapphireFillerCountKey,
+                receivedCount
+            );
+
+            SaveManager.Save(
+                saveCurrent: true,
+                saveCurrentRun: false
+            );
+
+            MelonLogger.Msg(
+                "[AP Sapphire] Awarded " +
+                sapphireToGive +
+                " Sapphire from " +
+                newItemCount +
+                " new Archipelago filler item(s)."
+            );
+        }
+
+        private static void ApplyArchipelagoDestinyUpgrade(
+            TreeShopItemStorage treeShopStorage,
+            MethodInfo unlockMethod,
+            int treeShopItemId,
+            int requestedCount,
+            string apItemName,
+            ref bool saveChanged)
+        {
+            TreeShopItemEntity shopItem =
+                TreeShopItemDatabase.FindById(
+                    treeShopItemId
+                );
+
+            if (shopItem == null)
+            {
+                MelonLogger.Warning(
+                    $"[AP Destiny Upgrade] Could not find " +
+                    $"TreeShop item {treeShopItemId} " +
+                    $"for {apItemName}."
+                );
+
+                return;
+            }
+
+            int desiredCount =
+                Math.Min(
+                    Math.Max(
+                        requestedCount,
+                        0
+                    ),
+                    shopItem.maxQuantity
+                );
+
+            string saveKey =
+                $"TreeShopItem_{treeShopItemId}_" +
+                $"PurchasedCount";
+
+            int currentCount =
+                SaveManager.Current.GetInt(
+                    saveKey,
+                    0
+                );
+
+            // Archipelago grants the Wishing Fountain
+            // immediately when its AP item is received.
+            // Vanilla normally waits until a game-over
+            // screen before setting this flag.
+            if (treeShopItemId == 14 &&
+                desiredCount > 0 &&
+                !SaveManager.Current.GetBool(
+                    "PresetSelectorDeathCheck",
+                    false
+                ))
+            {
+                SaveManager.Current.SetBool(
+                    "PresetSelectorDeathCheck",
+                    true
+                );
+
+                saveChanged = true;
+
+                APDebug.Log(
+                    "[AP Destiny Upgrade] " +
+                    "Wishing Fountain preset selector enabled."
+                );
+            }
+
+            if (currentCount == desiredCount)
+                return;
+
+            SaveManager.Current.SetInt(
+                saveKey,
+                desiredCount
+            );
+
+            saveChanged = true;
+
+            APDebug.Log(
+                $"[AP Destiny Upgrade] " +
+                $"{apItemName} -> TreeShop " +
+                $"{treeShopItemId}: " +
+                $"{currentCount} -> {desiredCount}"
+            );
+
+            // Apply Sephiria's real vanilla effect immediately
+            // when the runtime player exists.
+            //
+            // Unlock(..., false) is the same path vanilla Load()
+            // uses for already-owned Destiny upgrades.
+            if (desiredCount > 0 &&
+                treeShopStorage != null &&
+                unlockMethod != null)
+            {
+                unlockMethod.Invoke(
+                    treeShopStorage,
+                    new object[]
+                    {
+                shopItem,
+                desiredCount,
+                false
+                    }
+                );
+            }
         }
 
         public static void RefreshArchipelagoFruitSkewerStand()
@@ -5703,7 +8499,7 @@ namespace SephiriaAPRandomizer
             if (weaponController.currentWeapon.weaponType !=
                 StartingWeaponType.Value)
             {
-                MelonLogger.Msg(
+                APDebug.Log(
                     $"[AP Weapons] Replacing vanilla starting weapon " +
                     $"{weaponController.currentWeapon.weaponType} with " +
                     $"{StartingWeaponType.Value}."
@@ -5737,7 +8533,7 @@ namespace SephiriaAPRandomizer
                 saveCurrentRun: false
             );
 
-            MelonLogger.Msg(
+            APDebug.Log(
                 $"[AP Weapons] Initial starting weapon equipped: " +
                 $"{StartingWeaponType.Value} " +
                 $"(Weapon ID {startingWeapon.id})."
@@ -5815,7 +8611,7 @@ namespace SephiriaAPRandomizer
                         shouldBeVisible
                     );
 
-                    MelonLogger.Msg(
+                    APDebug.Log(
                         $"[AP Weapons] {weaponType} stand = " +
                         $"{(shouldBeVisible ? "VISIBLE" : "HIDDEN")}."
                     );
@@ -5831,6 +8627,296 @@ namespace SephiriaAPRandomizer
                 return;
 
             weaponStandSyncPending = true;
+        }
+
+        public static int GetProgressiveAnvilUpgradeCount()
+        {
+            if (!IsArchipelagoSave)
+                return 0;
+
+            ArchipelagoSession apSession =
+                session as ArchipelagoSession;
+
+            if (apSession == null ||
+                !apSession.Socket.Connected)
+            {
+                return 0;
+            }
+
+            // If Anvil unlocks were not randomized,
+            // both uses are available from the beginning.
+            if (!RandomizeAnvilUnlocks)
+                return 2;
+
+            return Math.Min(
+                2,
+                apSession.Items.AllItemsReceived.Count(
+                    item =>
+                        item != null &&
+                        string.Equals(
+                            item.ItemName,
+                            "Progressive Anvil Unlock",
+                            StringComparison.Ordinal
+                        )
+                )
+            );
+        }
+
+        public static int GetArchipelagoAnvilUsesThisRun()
+        {
+            if (!IsArchipelagoSave ||
+                SaveManager.CurrentRun == null)
+            {
+                return 0;
+            }
+
+            return SaveManager.CurrentRun.GetInt(
+                ArchipelagoAnvilUsesThisRunKey,
+                0
+            );
+        }
+
+
+        public static bool CanUseArchipelagoRunAnvil()
+        {
+            if (!IsArchipelagoSave)
+                return true;
+
+            int unlockedAnvils =
+                GetProgressiveAnvilUpgradeCount();
+
+            int usedAnvils =
+                GetArchipelagoAnvilUsesThisRun();
+
+            return usedAnvils < unlockedAnvils;
+        }
+
+
+        public static void RecordArchipelagoRunAnvilUse()
+        {
+            if (!IsArchipelagoSave ||
+                SaveManager.CurrentRun == null)
+            {
+                return;
+            }
+
+            int unlockedAnvils =
+                GetProgressiveAnvilUpgradeCount();
+
+            int usedAnvils =
+                GetArchipelagoAnvilUsesThisRun();
+
+            if (usedAnvils >= unlockedAnvils)
+                return;
+
+            SaveManager.CurrentRun.SetInt(
+                ArchipelagoAnvilUsesThisRunKey,
+                usedAnvils + 1
+            );
+
+            SaveManager.Save(
+                saveCurrent: false,
+                saveCurrentRun: true
+            );
+        }
+
+
+        public static void ResetArchipelagoAnvilRunState()
+        {
+            if (!IsArchipelagoSave ||
+                SaveManager.CurrentRun == null)
+            {
+                return;
+            }
+
+            SaveManager.CurrentRun.SetInt(
+                ArchipelagoAnvilUsesThisRunKey,
+                0
+            );
+        }
+
+        public static void QueueArchipelagoCintamaniSync()
+        {
+            if (!IsArchipelagoSave)
+                return;
+
+            cintamaniSyncPending = true;
+        }
+
+
+        public static int GetUnlockedStartingCintamaniCount()
+        {
+            if (!IsArchipelagoSave)
+                return 0;
+
+            ArchipelagoSession apSession =
+                session as ArchipelagoSession;
+
+            if (apSession == null ||
+                !apSession.Socket.Connected)
+            {
+                return 0;
+            }
+
+            int receivedCount =
+                apSession.Items.AllItemsReceived.Count(
+                    item =>
+                        item != null &&
+                        string.Equals(
+                            item.ItemName,
+                            ArchipelagoStartingCintamaniStoneItemName,
+                            StringComparison.Ordinal
+                        )
+                );
+
+            return Math.Min(
+                StartingCintamaniStonePoolCount,
+                receivedCount
+            );
+        }
+
+
+        public static void ResetArchipelagoCintamaniRunState()
+        {
+            if (!IsArchipelagoSave)
+                return;
+
+            if (SaveManager.CurrentRun != null)
+            {
+                SaveManager.CurrentRun.SetInt(
+                    ArchipelagoCintamaniGrantedThisRunKey,
+                    0
+                );
+            }
+
+            cintamaniSyncPending = true;
+        }
+
+        private static void UpdateArchipelagoCintamani()
+        {
+            if (!cintamaniSyncPending)
+                return;
+
+            if (!IsArchipelagoSave ||
+                SaveManager.CurrentRun == null)
+            {
+                return;
+            }
+
+            int unlockedCount =
+                GetUnlockedStartingCintamaniCount();
+
+            if (unlockedCount <= 0)
+            {
+                cintamaniSyncPending = false;
+                return;
+            }
+
+            if (!NetworkServer.active ||
+                CombatManager.Instance == null ||
+                CombatManager.Instance.CurrentPlayer == null)
+            {
+                return;
+            }
+
+            PlayerAvatar player =
+                CombatManager.Instance.CurrentPlayer;
+
+            if (player.isInDungeon <= 0 ||
+                player.Inventory == null)
+            {
+                return;
+            }
+
+            int grantedThisRun =
+                SaveManager.CurrentRun.GetInt(
+                    ArchipelagoCintamaniGrantedThisRunKey,
+                    0
+                );
+
+            if (grantedThisRun >= unlockedCount)
+            {
+                cintamaniSyncPending = false;
+                return;
+            }
+
+            ItemEntity cintamani =
+                ItemDatabase.FindItemById(
+                    ArchipelagoCintamaniEntityId
+                );
+
+            if (cintamani == null)
+            {
+                MelonLogger.Warning(
+                    "[AP Cintamani] Item 1146 could not be found."
+                );
+
+                return;
+            }
+
+            sbyte itemX;
+            sbyte itemY;
+            sbyte itemQuantity;
+
+            // Only keep one physical Cintamani in the
+            // inventory at a time.
+            if (player.Inventory.HasItem(
+                    cintamani,
+                    out itemX,
+                    out itemY,
+                    out itemQuantity))
+            {
+                return;
+            }
+
+            int instanceId =
+                ItemDatabase.GenerateInstanceID(
+                    new System.Random()
+                );
+
+            bool added;
+
+            using (
+                new GridInventory.Permission(
+                    player.Inventory
+                )
+            )
+            {
+                added =
+                    player.Inventory.LocalAddItem(
+                        instanceId,
+                        ArchipelagoCintamaniEntityId,
+                        1,
+                        0,
+                        false,
+                        false
+                    );
+            }
+
+            if (!added)
+                return;
+
+            grantedThisRun++;
+
+            SaveManager.CurrentRun.SetInt(
+                ArchipelagoCintamaniGrantedThisRunKey,
+                grantedThisRun
+            );
+
+            SaveManager.Save(
+                saveCurrent: false,
+                saveCurrentRun: true
+            );
+
+            MelonLogger.Msg(
+                "[AP Cintamani] Starting Cintamani granted. " +
+                $"Charge {grantedThisRun}/{unlockedCount}."
+            );
+
+            if (grantedThisRun >= unlockedCount)
+            {
+                cintamaniSyncPending = false;
+            }
         }
 
         public static bool GetArchipelagoPassiveAccess(
@@ -5990,6 +9076,77 @@ namespace SephiriaAPRandomizer
 
             MelonLogger.Msg(
                 $"[AP Mission] Checked {locationName}."
+            );
+
+            return true;
+        }
+
+        public static bool TryCompleteArchipelagoDestinyInscription(int treeShopItemId)
+        {
+            if (!IsArchipelagoSave)
+                return false;
+
+            long locationId;
+
+            if (!archipelagoDestinyInscriptionLocationsByTreeShopId
+                    .TryGetValue(
+                        treeShopItemId,
+                        out locationId))
+            {
+                MelonLogger.Warning(
+                    $"[AP Tree] No AP location mapped to " +
+                    $"TreeShop item {treeShopItemId}."
+                );
+
+                return false;
+            }
+
+            ArchipelagoSession apSession =
+                session as ArchipelagoSession;
+
+            if (apSession == null ||
+                !apSession.Socket.Connected)
+            {
+                MelonLogger.Warning(
+                    $"[AP Tree] Cannot check TreeShop item " +
+                    $"{treeShopItemId}: Archipelago is disconnected."
+                );
+
+                return false;
+            }
+
+            // Already sent.
+            if (!apSession.Locations
+                    .AllMissingLocations
+                    .Contains(locationId))
+            {
+                return true;
+            }
+
+            string locationName =
+                apSession.Locations.GetLocationNameFromId(
+                    locationId,
+                    "Sephiria"
+                );
+
+            try
+            {
+                apSession.Locations.CompleteLocationChecks(
+                    locationId
+                );
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Error(
+                    $"[AP Tree] Failed to check " +
+                    $"{locationName}: {ex.Message}"
+                );
+
+                return false;
+            }
+
+            MelonLogger.Msg(
+                $"[AP Tree] Checked {locationName}."
             );
 
             return true;
@@ -6799,6 +9956,606 @@ namespace SephiriaAPRandomizer
 
             apSession.SetGoalAchieved();
         }
+
+        private static bool IsAllowedArchipelagoConsoleCommand(
+            string command)
+        {
+            if (string.IsNullOrWhiteSpace(command))
+                return false;
+
+            string lower =
+                command.Trim()
+                    .ToLowerInvariant();
+
+            return
+                lower == "!hint" ||
+                lower.StartsWith(
+                    "!hint ",
+                    StringComparison.Ordinal
+                ) ||
+
+                lower == "!hint_location" ||
+                lower.StartsWith(
+                    "!hint_location ",
+                    StringComparison.Ordinal
+                ) ||
+
+                lower == "!missing" ||
+                lower.StartsWith(
+                    "!missing ",
+                    StringComparison.Ordinal
+                ) ||
+
+                lower == "!checked" ||
+                lower.StartsWith(
+                    "!checked ",
+                    StringComparison.Ordinal
+                ) ||
+
+                lower == "!remaining" ||
+
+                lower == "!players" ||
+
+                lower == "!status" ||
+                lower.StartsWith(
+                    "!status ",
+                    StringComparison.Ordinal
+                );
+        }
+
+
+        public static bool TrySendArchipelagoConsoleCommand(
+            string command,
+            out string error)
+        {
+            error = null;
+
+            if (!IsArchipelagoSave)
+            {
+                error =
+                    "This console is only available on " +
+                    "Archipelago saves.";
+
+                return false;
+            }
+
+            ArchipelagoSession apSession =
+                session as ArchipelagoSession;
+
+            if (apSession == null ||
+                !apSession.Socket.Connected)
+            {
+                error =
+                    "Archipelago is not connected.";
+
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(command))
+                return false;
+
+            command =
+                command.Trim();
+
+            if (!IsAllowedArchipelagoConsoleCommand(
+                    command))
+            {
+                error =
+                    "Command not allowed. Type help " +
+                    "for the supported commands.";
+
+                return false;
+            }
+
+            try
+            {
+                QueueArchipelagoConsoleLine(
+                    "> " + command
+                );
+
+                apSession.Socket.SendPacket(
+                    new SayPacket
+                    {
+                        Text = command
+                    }
+                );
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error =
+                    "Failed to send command: " +
+                    ex.Message;
+
+                return false;
+            }
+        }
+
+        public static void AddArchipelagoLocalConsoleLine(
+            string line)
+        {
+            QueueArchipelagoConsoleLine(
+                line
+            );
+        }
+
+        private static void ConfigureArchipelagoDeathLink(
+            ArchipelagoSession apSession)
+        {
+            if (apSession == null)
+                return;
+
+            if (!DeathLinkEnabled)
+                return;
+
+            DeathLinkService service =
+                apSession.CreateDeathLinkService();
+
+            service.OnDeathLinkReceived +=
+                HandleArchipelagoDeathLinkReceived;
+
+            service.EnableDeathLink();
+
+            deathLinkService = service;
+
+            MelonLogger.Msg(
+                "[AP DeathLink] Registered DeathLink service."
+            );
+        }
+
+
+        private static void ShutdownArchipelagoDeathLink()
+        {
+            DeathLinkService service = deathLinkService as DeathLinkService;
+
+            if (service == null)
+                return;
+
+            try
+            {
+                service.OnDeathLinkReceived -= HandleArchipelagoDeathLinkReceived;
+                service.DisableDeathLink();
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning(
+                    "[AP DeathLink] Could not cleanly disable: " +
+                    ex.Message
+                );
+            }
+
+            deathLinkService = null;
+            pendingDeathLink = null;
+            suppressNextOutgoingDeathLink = false;
+
+            object ignoredDeathLink;
+
+            while (receivedDeathLinks.TryDequeue(
+                out ignoredDeathLink))
+            {
+            }
+        }
+
+        private static void HandleArchipelagoDeathLinkReceived(
+            DeathLink deathLink)
+        {
+            if (!DeathLinkEnabled)
+                return;
+
+            if (deathLink == null)
+                return;
+
+            // Do not touch Unity/Sephiria objects here.
+            // Process it from OnUpdate on the main thread.
+            receivedDeathLinks.Enqueue(
+                deathLink
+            );
+        }
+
+        private static bool IsSafeToApplyDeathLink(
+            PlayerAvatar player)
+        {
+            if (player == null)
+                return false;
+
+            if (player.isInDungeon <= 0)
+                return false;
+
+            if (player.IsDead)
+                return false;
+
+            if (UIManager.Instance != null &&
+                UIManager.Instance.CurrentControlStack != null)
+            {
+                return false;
+            }
+
+            if (!player.CanMove)
+                return false;
+
+            if (Time.timeScale <= 0f)
+                return false;
+
+            return true;
+        }
+        private static void UpdateArchipelagoDeathLink()
+        {
+            if (!DeathLinkEnabled ||
+                !IsArchipelagoSave)
+            {
+                pendingDeathLink = null;
+
+                object ignored;
+
+                while (receivedDeathLinks.TryDequeue(
+                    out ignored))
+                {
+                }
+
+                return;
+            }
+
+            // Once this run has been successfully completed,
+            // DeathLink no longer applies until the next run.
+            //
+            // This prevents an incoming DeathLink from killing
+            // the player during a victory cutscene/reset.
+            if (suppressOutgoingDeathLinkForRunVictory)
+            {
+                pendingDeathLink = null;
+
+                object ignoredAfterVictory;
+
+                while (receivedDeathLinks.TryDequeue(
+                    out ignoredAfterVictory))
+                {
+                }
+
+                return;
+            }
+
+            PlayerAvatar player = null;
+
+            if (CombatManager.Instance != null)
+            {
+                player =
+                    CombatManager.Instance.CurrentPlayer
+                        as PlayerAvatar;
+            }
+
+
+            object receivedObject;
+
+            while (receivedDeathLinks.TryDequeue(
+                out receivedObject))
+            {
+                DeathLink received =
+                    receivedObject as DeathLink;
+
+                if (received == null)
+                    continue;
+
+
+                // Extra protection against our own bounce.
+                if (!string.IsNullOrEmpty(
+                        currentArchipelagoSlotName) &&
+                    string.Equals(
+                        received.Source,
+                        currentArchipelagoSlotName,
+                        StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+
+                // No player object yet.
+                // Hold it temporarily until we know whether
+                // we're in a run or in town.
+                if (player == null)
+                {
+                    pendingDeathLink = received;
+                    continue;
+                }
+
+
+                // Explicit design choice:
+                // DeathLinks received outside a run are discarded.
+                if (player.isInDungeon <= 0)
+                {
+                    MelonLogger.Msg(
+                        "[AP DeathLink] Discarded DeathLink from " +
+                        received.Source +
+                        " because the player is outside a run."
+                    );
+
+                    continue;
+                }
+
+
+                // Don't carry a DeathLink into the next life.
+                if (player.IsDead)
+                {
+                    MelonLogger.Msg(
+                        "[AP DeathLink] Discarded DeathLink because " +
+                        "the player is already dead."
+                    );
+
+                    continue;
+                }
+
+
+                if (IsSafeToApplyDeathLink(player))
+                {
+                    ApplyArchipelagoDeathLink(
+                        player,
+                        received
+                    );
+                }
+                else
+                {
+                    pendingDeathLink = received;
+
+                    MelonLogger.Msg(
+                        "[AP DeathLink] DeathLink is pending until " +
+                        "the player is safely controllable."
+                    );
+                }
+            }
+
+
+            if (pendingDeathLink == null)
+                return;
+
+
+            if (player == null)
+                return;
+
+
+            // The player left/finished the run before the
+            // pending DeathLink could safely fire.
+            if (player.isInDungeon <= 0)
+            {
+                MelonLogger.Msg(
+                    "[AP DeathLink] Discarded pending DeathLink " +
+                    "after leaving the run."
+                );
+
+                pendingDeathLink = null;
+                return;
+            }
+
+
+            if (player.IsDead)
+            {
+                pendingDeathLink = null;
+                return;
+            }
+
+
+            if (!IsSafeToApplyDeathLink(player))
+                return;
+
+
+            DeathLink deathLinkToApply = pendingDeathLink as DeathLink;
+
+            pendingDeathLink = null;
+
+            if (deathLinkToApply == null)
+                return;
+
+            ApplyArchipelagoDeathLink(
+                player,
+                deathLinkToApply
+            );
+        }
+
+        private static void ApplyArchipelagoDeathLink(
+            PlayerAvatar player,
+            DeathLink deathLink)
+        {
+            if (player == null ||
+                deathLink == null)
+            {
+                return;
+            }
+
+            if (!NetworkServer.active)
+            {
+                pendingDeathLink = deathLink;
+                return;
+            }
+
+            MelonLogger.Warning(
+                 "[AP DeathLink] Received from " +
+                 deathLink.Source +
+                 (string.IsNullOrEmpty(deathLink.Cause)
+                     ? "."
+                     : ": " + deathLink.Cause)
+             );
+
+            QueueArchipelagoRecentItem(
+                "DeathLink Received",
+                !string.IsNullOrEmpty(deathLink.Cause)
+                    ? deathLink.Cause
+                    : "from " + deathLink.Source
+            );
+
+            suppressNextOutgoingDeathLink = true;
+
+            try
+            {
+                player.LocalApplySystemDamage(
+                    player.MaxHp * 100f
+                );
+
+                if (!player.IsDead)
+                {
+                    suppressNextOutgoingDeathLink = false;
+                }
+            }
+            catch
+            {
+                suppressNextOutgoingDeathLink = false;
+
+                throw;
+            }
+        }
+
+        private static string GetArchipelagoDeathLinkCause(
+            string source)
+        {
+            if (archipelagoDeathLinkMessages == null ||
+                archipelagoDeathLinkMessages.Length == 0)
+            {
+                return source + " died in Sephiria.";
+            }
+
+            int index =
+                archipelagoDeathLinkMessageRandom.Next(
+                    archipelagoDeathLinkMessages.Length
+                );
+
+            return string.Format(
+                archipelagoDeathLinkMessages[index],
+                source
+            );
+        }
+
+        public static void HandleLocalPlayerDeathForDeathLink(
+            PlayerSpawner spawner)
+        {
+            if (!IsArchipelagoSave)
+                return;
+
+            if (!DeathLinkEnabled)
+                return;
+
+            if (spawner == null ||
+                spawner.PlayerAvatar == null)
+            {
+                return;
+            }
+
+            if (!spawner.isLocalPlayer)
+                return;
+
+            // A chapter/run was successfully completed.
+            // Sephiria may technically kill the player as part of
+            // returning to town or playing the ending.
+            //
+            // This is not a gameplay death and must never send
+            // an Archipelago DeathLink.
+            if (suppressOutgoingDeathLinkForRunVictory)
+            {
+                // If an incoming DeathLink happened to be pending too,
+                // don't let that suppression leak into the next run.
+                suppressNextOutgoingDeathLink = false;
+
+                MelonLogger.Msg(
+                    "[AP DeathLink] Suppressed outgoing DeathLink " +
+                    "because the run ended in victory."
+                );
+
+                return;
+            }
+
+
+            // Incoming DeathLink caused this death.
+            // Do not bounce it back out.
+            if (suppressNextOutgoingDeathLink)
+            {
+                suppressNextOutgoingDeathLink = false;
+
+                MelonLogger.Msg(
+                    "[AP DeathLink] Suppressed outgoing DeathLink " +
+                    "for an incoming DeathLink death."
+                );
+
+                return;
+            }
+
+
+            // Only deaths during actual runs participate.
+            if (spawner.PlayerAvatar.isInDungeon <= 0)
+                return;
+
+            DeathLinkService service = deathLinkService as DeathLinkService;
+
+            if (service == null ||
+                !IsArchipelagoConnected)
+            {
+                return;
+            }
+
+            string source =
+                !string.IsNullOrEmpty(
+                    currentArchipelagoSlotName)
+                    ? currentArchipelagoSlotName
+                    : "Sephiria Player";
+
+            string cause =
+                GetArchipelagoDeathLinkCause(
+                    source
+                );
+
+            try
+            {
+                service.SendDeathLink(
+                    new DeathLink(
+                        source,
+                        cause
+                    )
+                );
+
+                QueueArchipelagoRecentItem(
+                    "DeathLink Sent",
+                    cause
+                );
+
+                MelonLogger.Msg(
+                    "[AP DeathLink] Sent DeathLink."
+                );
+            }
+            catch (Exception ex)
+            {
+                MelonLogger.Warning(
+                    "[AP DeathLink] Failed to send: " +
+                    ex.Message
+                );
+            }
+        }
+
+        public static void MarkArchipelagoRunVictory()
+        {
+            if (!IsArchipelagoSave)
+                return;
+
+            if (!suppressOutgoingDeathLinkForRunVictory)
+            {
+                MelonLogger.Msg(
+                    "[AP DeathLink] Run victory reached. " +
+                    "Outgoing DeathLink suppressed until the next run."
+                );
+            }
+
+            suppressOutgoingDeathLinkForRunVictory = true;
+        }
+
+
+        public static void ResetArchipelagoRunVictory()
+        {
+            suppressOutgoingDeathLinkForRunVictory = false;
+
+            // Nothing from the previous life/run should
+            // carry into the new run.
+            suppressNextOutgoingDeathLink = false;
+            pendingDeathLink = null;
+
+            object ignored;
+
+            while (receivedDeathLinks.TryDequeue(out ignored)) { }
+        }
     }
 
     public class ArchipelagoCostumeTabController : MonoBehaviour
@@ -7601,16 +11358,55 @@ public class ArchipelagoJournalContentController : MonoBehaviour
 
     private UI_JournalPanel_SearchOptionButton selectedFloorButton;
 
-    private string selectedBossName;
-    private GameObject subTabRoot;
-    private UI_HorayButton bossRewardsTabButton;
-    private UI_HorayButton upgradesTabButton;
-    private Button bossRewardsClickable;
-    private Button upgradesClickable;
+    private enum ArchipelagoJournalSubTab
+    {
+        BossRewards,
+        Anvil,
+        Console,
+        Hints
+    }
 
-    private readonly HashSet<GameObject> bossRewardsSectionRoots = new HashSet<GameObject>();
-    private bool showingUpgrades;
-    public string SelectedFloor { get; private set; } = "Mole Stronghold";
+    private string selectedBossName;
+
+    // Single AP row:
+    // Boss Rewards | Anvil | Console | Hints
+    private GameObject subTabRoot;
+    private GameObject bossRewardsContentTemplateRoot;
+
+    private UI_HorayButton bossRewardsTabButton;
+    private UI_HorayButton anvilTabButton;
+    private UI_HorayButton consoleTabButton;
+    private UI_HorayButton hintsTabButton;
+
+    private Button bossRewardsClickable;
+    private Button anvilClickable;
+    private Button consoleClickable;
+    private Button hintsClickable;
+
+    // Large content area underneath the tabs.
+    // Used by Anvil, Console, and Hints.
+    private GameObject secondaryContentRoot;
+    private TextMeshProUGUI secondaryContentTitleText;
+    private TextMeshProUGUI secondaryContentBodyText;
+    private GameObject consoleContentRoot;
+    private ScrollRect consoleScrollRect;
+    private RectTransform consoleScrollContentRect;
+    private TextMeshProUGUI consoleOutputText;
+
+    private TMP_InputField consoleInputField;
+
+    private int lastConsoleHistoryVersion = -1;
+    private int lastHintHistoryVersion = -1;
+
+    private readonly HashSet<GameObject>
+        bossRewardsSectionRoots =
+            new HashSet<GameObject>();
+
+    private ArchipelagoJournalSubTab currentSubTab =
+        ArchipelagoJournalSubTab.BossRewards;
+
+    public string SelectedFloor { get; private set; } =
+        "Mole Stronghold";
 
 
     // =========================================================
@@ -7708,6 +11504,47 @@ public class ArchipelagoJournalContentController : MonoBehaviour
         ShowBossRewards();
     }
 
+    private void Update()
+    {
+        if (currentSubTab ==
+            ArchipelagoJournalSubTab.Console)
+        {
+            // Keep Console presentation correct even if
+            // Sephiria reapplies cloned UI values.
+            ApplyConsolePresentation();
+
+            int version =
+                SephiriaMod
+                    .GetArchipelagoConsoleHistoryVersion();
+
+            if (version !=
+                lastConsoleHistoryVersion)
+            {
+                RefreshConsoleOutput();
+            }
+
+            return;
+        }
+
+
+        if (currentSubTab ==
+            ArchipelagoJournalSubTab.Hints)
+        {
+            // Keep Hints presentation correct even after
+            // closing/reopening the Journal.
+            ApplyHintsPresentation();
+
+            int version =
+                SephiriaMod
+                    .GetArchipelagoHintHistoryVersion();
+
+            if (version !=
+                lastHintHistoryVersion)
+            {
+                RefreshHintsOutput();
+            }
+        }
+    }
 
     // =========================================================
     // Controller navigation
@@ -7754,7 +11591,7 @@ public class ArchipelagoJournalContentController : MonoBehaviour
     // =========================================================
 
     private void BuildSubTabs(
-    Transform itemJournalRoot)
+        Transform itemJournalRoot)
     {
         if (itemJournalRoot == null)
         {
@@ -7765,17 +11602,6 @@ public class ArchipelagoJournalContentController : MonoBehaviour
 
             return;
         }
-
-        // -------------------------------------------------
-        // Find Sephiria's actual Item inner-tab bar.
-        //
-        // Runtime hierarchy:
-        // InnerTab_Button
-        //   InnerTab_Button_Charm
-        //   InnerTab_Button_StoneTablet
-        //   InnerTab_Button_Combo
-        //   InnerTab_Button_Misc
-        // -------------------------------------------------
 
         Transform sourceTabRoot =
             itemJournalRoot.Find(
@@ -7792,53 +11618,46 @@ public class ArchipelagoJournalContentController : MonoBehaviour
             return;
         }
 
-        Transform sourceArtifactTransform =
+        // Vanilla order:
+        //
+        // Charm
+        // StoneTablet
+        // Combo
+        // Misc
+        //
+        // AP order:
+        //
+        // Boss Rewards
+        // Anvil
+        // Console
+        // Hints
+
+        Transform sourceBossTransform =
             sourceTabRoot.Find(
                 "InnerTab_Button_Charm"
             );
 
-        Transform sourceTabletTransform =
+        Transform sourceAnvilTransform =
             sourceTabRoot.Find(
                 "InnerTab_Button_StoneTablet"
             );
 
-        if (sourceArtifactTransform == null ||
-            sourceTabletTransform == null)
+        Transform sourceConsoleTransform =
+            sourceTabRoot.Find(
+                "InnerTab_Button_Combo"
+            );
+
+        if (sourceBossTransform == null ||
+            sourceAnvilTransform == null ||
+            sourceConsoleTransform == null)
         {
             MelonLogger.Warning(
-                "[AP Journal] Could not find the " +
-                "Artifact/Tablet inner-tab objects."
+                "[AP Journal] Could not find required " +
+                "Item inner-tab objects."
             );
 
             return;
         }
-
-        UI_HorayButton sourceArtifactTab =
-            sourceArtifactTransform
-                .GetComponent<UI_HorayButton>();
-
-        UI_HorayButton sourceTabletTab =
-            sourceTabletTransform
-                .GetComponent<UI_HorayButton>();
-
-        if (sourceArtifactTab == null ||
-            sourceTabletTab == null)
-        {
-            MelonLogger.Warning(
-                "[AP Journal] Artifact/Tablet objects " +
-                "did not contain UI_HorayButton."
-            );
-
-            return;
-        }
-
-        MelonLogger.Msg(
-            "[AP Journal] Found vanilla Item inner tabs."
-        );
-
-        // -------------------------------------------------
-        // Clone the entire vanilla inner-tab bar.
-        // -------------------------------------------------
 
         subTabRoot =
             UnityEngine.Object.Instantiate(
@@ -7848,11 +11667,11 @@ public class ArchipelagoJournalContentController : MonoBehaviour
         subTabRoot.name =
             "ArchipelagoSubTabBar";
 
-        // Item and AP journal contents occupy the same
-        // journal area, so preserve the vanilla bar's
-        // screen position when moving it into the AP page.
-        RectTransform sourceRect = sourceTabRoot.GetComponent<RectTransform>();
-        RectTransform clonedRect = subTabRoot.GetComponent<RectTransform>();
+        RectTransform sourceRect =
+            sourceTabRoot.GetComponent<RectTransform>();
+
+        RectTransform clonedRect =
+            subTabRoot.GetComponent<RectTransform>();
 
         subTabRoot.transform.SetParent(
             layout.transform,
@@ -7872,7 +11691,11 @@ public class ArchipelagoJournalContentController : MonoBehaviour
                 sourceRect.pivot;
 
             clonedRect.anchoredPosition =
-                sourceRect.anchoredPosition;
+                sourceRect.anchoredPosition +
+                new Vector2(
+                    0f,
+                    -8f
+                );
 
             clonedRect.sizeDelta =
                 sourceRect.sizeDelta;
@@ -7884,26 +11707,34 @@ public class ArchipelagoJournalContentController : MonoBehaviour
                 sourceRect.localRotation;
         }
 
-        // -------------------------------------------------
-        // Find the two cloned buttons we want to keep.
-        // -------------------------------------------------
 
-        Transform bossRewardsTransform =
+        Transform bossTransform =
             subTabRoot.transform.Find(
                 "InnerTab_Button_Charm"
             );
 
-        Transform upgradesTransform =
+        Transform anvilTransform =
             subTabRoot.transform.Find(
                 "InnerTab_Button_StoneTablet"
             );
 
-        if (bossRewardsTransform == null ||
-            upgradesTransform == null)
+        Transform consoleTransform =
+            subTabRoot.transform.Find(
+                "InnerTab_Button_Combo"
+            );
+
+        Transform miscTransform =
+            subTabRoot.transform.Find(
+                "InnerTab_Button_Misc"
+            );
+
+        if (bossTransform == null ||
+            anvilTransform == null ||
+            consoleTransform == null)
         {
             MelonLogger.Warning(
                 "[AP Journal] Could not resolve cloned " +
-                "Boss Rewards / Upgrades buttons."
+                "Boss Rewards / Anvil / Console buttons."
             );
 
             UnityEngine.Object.Destroy(
@@ -7915,19 +11746,74 @@ public class ArchipelagoJournalContentController : MonoBehaviour
             return;
         }
 
-        bossRewardsTabButton =
-            bossRewardsTransform
-                .GetComponent<UI_HorayButton>();
+        // The vanilla Misc tab is an icon-style button,
+        // so don't use it as our text-based Hints tab.
+        if (miscTransform != null)
+        {
+            miscTransform.gameObject.SetActive(false);
+        }
 
-        upgradesTabButton =
-            upgradesTransform
-                .GetComponent<UI_HorayButton>();
 
-        if (bossRewardsTabButton == null ||
-            upgradesTabButton == null)
+        // Clone the normal Console tab so Hints has the
+        // same visual structure as the other text tabs.
+        GameObject hintsObject =
+            UnityEngine.Object.Instantiate(
+                consoleTransform.gameObject,
+                subTabRoot.transform
+            );
+
+        hintsObject.name =
+            "InnerTab_Button_Hints";
+
+        Transform hintsTransform =
+            hintsObject.transform;
+
+        RectTransform anvilButtonRect =
+            anvilTransform.GetComponent<RectTransform>();
+
+        RectTransform consoleButtonRect =
+            consoleTransform.GetComponent<RectTransform>();
+
+        RectTransform hintsButtonRect =
+            hintsTransform.GetComponent<RectTransform>();
+
+        if (anvilButtonRect == null ||
+            consoleButtonRect == null ||
+            hintsButtonRect == null)
         {
             MelonLogger.Warning(
-                "[AP Journal] Cloned inner tabs did not " +
+                "[AP Journal] Could not position Hints tab."
+            );
+
+            UnityEngine.Object.Destroy(
+                hintsObject
+            );
+
+            return;
+        }
+
+        // Use the exact spacing already used between
+        // Anvil and Console.
+        Vector3 tabStep =
+            consoleTransform.localPosition -
+            anvilTransform.localPosition;
+
+        hintsTransform.localPosition =
+            consoleTransform.localPosition +
+            tabStep;
+
+        bossRewardsTabButton = bossTransform.GetComponent<UI_HorayButton>();
+        anvilTabButton = anvilTransform.GetComponent<UI_HorayButton>();
+        consoleTabButton = consoleTransform.GetComponent<UI_HorayButton>();
+        hintsTabButton = hintsTransform.GetComponent<UI_HorayButton>();
+
+        if (bossRewardsTabButton == null ||
+            anvilTabButton == null ||
+            consoleTabButton == null ||
+            hintsTabButton == null)
+        {
+            MelonLogger.Warning(
+                "[AP Journal] Cloned AP tabs did not " +
                 "contain UI_HorayButton."
             );
 
@@ -7936,46 +11822,9 @@ public class ArchipelagoJournalContentController : MonoBehaviour
             );
 
             subTabRoot = null;
-            bossRewardsTabButton = null;
-            upgradesTabButton = null;
 
             return;
         }
-
-        // -------------------------------------------------
-        // Remove the tabs we do NOT want.
-        //
-        // Combo = vanilla Combo tab
-        // Misc  = fourth vanilla inner-tab control
-        // -------------------------------------------------
-
-        Transform comboTransform =
-            subTabRoot.transform.Find(
-                "InnerTab_Button_Combo"
-            );
-
-        if (comboTransform != null)
-        {
-            comboTransform.gameObject.SetActive(
-                false
-            );
-        }
-
-        Transform miscTransform =
-            subTabRoot.transform.Find(
-                "InnerTab_Button_Misc"
-            );
-
-        if (miscTransform != null)
-        {
-            miscTransform.gameObject.SetActive(
-                false
-            );
-        }
-
-        // -------------------------------------------------
-        // Rename the two remaining tabs.
-        // -------------------------------------------------
 
         SetTabLabel(
             bossRewardsTabButton,
@@ -7983,65 +11832,90 @@ public class ArchipelagoJournalContentController : MonoBehaviour
         );
 
         SetTabLabel(
-            upgradesTabButton,
-            "Upgrades"
+            anvilTabButton,
+            "Anvil"
         );
 
-        // UI_HorayButton inherits from Button, so these
-        // are already the clickable components.
-        bossRewardsClickable =
-            bossRewardsTabButton;
+        SetTabLabel(
+            consoleTabButton,
+            "Console"
+        );
 
-        upgradesClickable =
-            upgradesTabButton;
+        SetTabLabel(
+            hintsTabButton,
+            "Hints"
+        );
 
-        // Remove the Item journal's original click actions.
-        bossRewardsClickable.onClick =
-            new Button.ButtonClickedEvent();
+        bossRewardsClickable = bossRewardsTabButton;
+        anvilClickable = anvilTabButton;
+        consoleClickable = consoleTabButton;
+        hintsClickable = hintsTabButton;
 
-        upgradesClickable.onClick =
-            new Button.ButtonClickedEvent();
+        bossRewardsClickable.onClick = new Button.ButtonClickedEvent();
+        anvilClickable.onClick = new Button.ButtonClickedEvent();
+        consoleClickable.onClick = new Button.ButtonClickedEvent();
+        hintsClickable.onClick = new Button.ButtonClickedEvent();
+
 
         bossRewardsClickable.onClick.AddListener(
             ShowBossRewards
         );
 
-        upgradesClickable.onClick.AddListener(
-            ShowUpgrades
+        anvilClickable.onClick.AddListener(
+            ShowAnvil
         );
 
-        // -------------------------------------------------
-        // Reserve vertical room above the existing
-        // floor/boss interface for this new row.
-        // -------------------------------------------------
+        consoleClickable.onClick.AddListener(
+            ShowConsole
+        );
 
-        RectTransform artifactRect =
-            sourceArtifactTab
-                .GetComponent<RectTransform>();
+        hintsClickable.onClick.AddListener(
+            ShowHints
+        );
 
-        RectTransform tabletRect =
-            sourceTabletTab
-                .GetComponent<RectTransform>();
+        // Determine the height of the tab row.
 
         float tabHeight = 0f;
 
-        if (artifactRect != null)
+        RectTransform bossRect =
+            sourceBossTransform
+                .GetComponent<RectTransform>();
+
+        RectTransform anvilRect =
+            sourceAnvilTransform
+                .GetComponent<RectTransform>();
+
+        RectTransform consoleRect =
+            sourceConsoleTransform
+                .GetComponent<RectTransform>();
+
+        if (bossRect != null)
         {
             tabHeight =
                 Mathf.Max(
                     tabHeight,
-                    artifactRect.rect.height
+                    bossRect.rect.height
                 );
         }
 
-        if (tabletRect != null)
+        if (anvilRect != null)
         {
             tabHeight =
                 Mathf.Max(
                     tabHeight,
-                    tabletRect.rect.height
+                    anvilRect.rect.height
                 );
         }
+
+        if (consoleRect != null)
+        {
+            tabHeight =
+                Mathf.Max(
+                    tabHeight,
+                    consoleRect.rect.height
+                );
+        }
+
 
         if (tabHeight > 0f)
         {
@@ -8057,15 +11931,1219 @@ public class ArchipelagoJournalContentController : MonoBehaviour
             );
         }
 
-        UpdateSubTabVisuals();
 
-        MelonLogger.Msg(
-            "[AP Journal] Added Boss Rewards / " +
-            "Upgrades subtabs."
+        // Create the large area used by Anvil/Console.
+        BuildSecondaryContentRoot();
+
+        UpdateSubTabVisuals();
+    }
+
+    private void BuildSecondaryContentRoot()
+    {
+        if (layout == null ||
+            bossRewardsContentTemplateRoot == null)
+        {
+            MelonLogger.Warning(
+                "[AP Journal] Could not build secondary " +
+                "content root because the Boss Rewards " +
+                "panel template was not found."
+            );
+
+            return;
+        }
+
+        if (secondaryContentRoot != null)
+        {
+            UnityEngine.Object.Destroy(
+                secondaryContentRoot
+            );
+
+            secondaryContentRoot = null;
+            secondaryContentTitleText = null;
+            secondaryContentBodyText = null;
+        }
+
+        secondaryContentRoot =
+            UnityEngine.Object.Instantiate(
+                bossRewardsContentTemplateRoot
+            );
+
+        secondaryContentRoot.name =
+            "ArchipelagoSecondaryContent";
+
+        secondaryContentRoot.transform.SetParent(
+            layout.transform,
+            false
+        );
+
+        DisableBossRewardsPanelContents(
+            secondaryContentRoot.transform
+        );
+
+        HideSecondaryContentDivider(
+            secondaryContentRoot.transform
+        );
+
+        GameObject textRoot =
+            new GameObject(
+                "ArchipelagoSecondaryTextRoot",
+                typeof(RectTransform)
+            );
+
+        RectTransform textRootRect =
+            textRoot.GetComponent<RectTransform>();
+
+        textRoot.transform.SetParent(
+            secondaryContentRoot.transform,
+            false
+        );
+
+        textRootRect.anchorMin =
+            new Vector2(0f, 0f);
+
+        textRootRect.anchorMax =
+            new Vector2(1f, 1f);
+
+        textRootRect.pivot =
+            new Vector2(0.5f, 0.5f);
+
+        textRootRect.offsetMin =
+            new Vector2(24f, 24f);
+
+        textRootRect.offsetMax =
+            new Vector2(-24f, -24f);
+
+
+        // -----------------------------------------
+        // Title
+        // -----------------------------------------
+        if (layout.loreInfo_Title != null)
+        {
+            GameObject titleObject =
+                UnityEngine.Object.Instantiate(
+                    layout.loreInfo_Title.gameObject,
+                    textRoot.transform
+                );
+
+            titleObject.name =
+                "ArchipelagoSecondaryTitle";
+
+            DisableJournalLocalization(
+                titleObject
+            );
+
+            secondaryContentTitleText =
+                titleObject.GetComponent<TextMeshProUGUI>();
+
+            RectTransform titleRect =
+                titleObject.GetComponent<RectTransform>();
+
+            if (titleRect != null)
+            {
+                titleRect.anchorMin =
+                    new Vector2(0f, 1f);
+
+                titleRect.anchorMax =
+                    new Vector2(1f, 1f);
+
+                titleRect.pivot =
+                    new Vector2(0.5f, 1f);
+
+                titleRect.offsetMin =
+                    new Vector2(
+                        16f,
+                        -38f
+                    );
+
+                titleRect.offsetMax =
+                    new Vector2(
+                        -16f,
+                        -6f
+                    );
+            }
+
+            if (secondaryContentTitleText != null)
+            {
+                secondaryContentTitleText.alignment =
+                    TextAlignmentOptions.Top;
+
+                secondaryContentTitleText.fontSize =
+                    9f;
+
+                secondaryContentTitleText.fontStyle =
+                    FontStyles.Bold;
+
+                secondaryContentTitleText.characterSpacing =
+                    1f;
+            }
+        }
+
+        // -----------------------------------------
+        // Header background
+        // -----------------------------------------
+
+        GameObject headerBackgroundObject =
+            new GameObject(
+                "ArchipelagoSecondaryHeaderBackground",
+                typeof(RectTransform),
+                typeof(Image)
+            );
+
+        RectTransform headerBackgroundRect =
+            headerBackgroundObject
+                .GetComponent<RectTransform>();
+
+        headerBackgroundRect.SetParent(
+            textRoot.transform,
+            false
+        );
+
+        headerBackgroundRect.anchorMin =
+            new Vector2(0f, 1f);
+
+        headerBackgroundRect.anchorMax =
+            new Vector2(1f, 1f);
+
+        headerBackgroundRect.pivot =
+            new Vector2(0.5f, 1f);
+
+        headerBackgroundRect.offsetMin =
+            new Vector2(
+                0f,
+                -42f
+            );
+
+        headerBackgroundRect.offsetMax =
+            new Vector2(
+                0f,
+                0f
+            );
+
+        Image headerBackground =
+            headerBackgroundObject
+                .GetComponent<Image>();
+
+        headerBackground.color =
+            new UnityEngine.Color(
+                0f,
+                0f,
+                0f,
+                0.20f
+            );
+
+        headerBackground.raycastTarget =
+            false;
+
+
+        // Keep the background behind the title.
+        headerBackgroundObject.transform.SetAsFirstSibling();
+
+
+        // -----------------------------------------
+        // Thin divider under header
+        // -----------------------------------------
+
+        GameObject headerDividerObject =
+            new GameObject(
+                "ArchipelagoSecondaryHeaderDivider",
+                typeof(RectTransform),
+                typeof(Image)
+            );
+
+        RectTransform headerDividerRect =
+            headerDividerObject
+                .GetComponent<RectTransform>();
+
+        headerDividerRect.SetParent(
+            textRoot.transform,
+            false
+        );
+
+        headerDividerRect.anchorMin =
+            new Vector2(0f, 1f);
+
+        headerDividerRect.anchorMax =
+            new Vector2(1f, 1f);
+
+        headerDividerRect.pivot =
+            new Vector2(0.5f, 1f);
+
+        headerDividerRect.offsetMin =
+            new Vector2(
+                8f,
+                -43f
+            );
+
+        headerDividerRect.offsetMax =
+            new Vector2(
+                -8f,
+                -42f
+            );
+
+        Image headerDivider =
+            headerDividerObject
+                .GetComponent<Image>();
+
+        headerDivider.color =
+            new UnityEngine.Color(
+                1f,
+                1f,
+                1f,
+                0.18f
+            );
+
+        headerDivider.raycastTarget =
+            false;
+
+        // -----------------------------------------
+        // Body
+        // -----------------------------------------
+        if (layout.loreInfo_Description != null)
+        {
+            GameObject bodyObject =
+                UnityEngine.Object.Instantiate(
+                    layout.loreInfo_Description.gameObject,
+                    textRoot.transform
+                );
+
+            bodyObject.name =
+                "ArchipelagoSecondaryBody";
+
+            DisableJournalLocalization(
+                bodyObject
+            );
+
+            secondaryContentBodyText =
+                bodyObject.GetComponent<TextMeshProUGUI>();
+
+            RectTransform bodyRect =
+                bodyObject.GetComponent<RectTransform>();
+
+            if (bodyRect != null)
+            {
+                bodyRect.anchorMin =
+                    new Vector2(0f, 0f);
+
+                bodyRect.anchorMax =
+                    new Vector2(1f, 1f);
+
+                bodyRect.pivot =
+                    new Vector2(0.5f, 0.5f);
+
+                bodyRect.offsetMin =
+                    new Vector2(16f, 16f);
+
+                bodyRect.offsetMax =
+                    new Vector2(-16f, -72f);
+            }
+
+            if (secondaryContentTitleText != null)
+            {
+                secondaryContentTitleText.alignment =
+                    TextAlignmentOptions.Center;
+
+                secondaryContentTitleText.fontSize =
+                    9.5f;
+
+                secondaryContentTitleText.fontStyle =
+                    FontStyles.Bold;
+
+                secondaryContentTitleText.characterSpacing =
+                    1f;
+
+                secondaryContentTitleText.color =
+                    new UnityEngine.Color(
+                        1f,
+                        0.88f,
+                        0.62f,
+                        1f
+                    );
+            }
+        }
+
+        BuildConsoleContent();
+
+        secondaryContentRoot.SetActive(
+            false
         );
     }
 
-    public void ConfigureNavigation(Button topTabButton)
+    private void SubmitConsoleCommand(
+        string rawCommand)
+    {
+        string command =
+            rawCommand == null
+                ? ""
+                : rawCommand.Trim();
+
+        if (string.IsNullOrEmpty(command))
+        {
+            ReactivateConsoleInput();
+            return;
+        }
+
+
+        // Local-only command.
+        if (string.Equals(
+                command,
+                "clear",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            SephiriaMod
+                .ClearArchipelagoConsoleHistory();
+
+            RefreshConsoleOutput();
+
+            ReactivateConsoleInput();
+
+            return;
+        }
+
+
+        // Local-only command.
+        if (string.Equals(
+            command,
+            "help",
+            StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(
+            command,
+            "!help",
+            StringComparison.OrdinalIgnoreCase))
+        {
+            AddLocalConsoleHelp();
+
+            RefreshConsoleOutput();
+
+            ReactivateConsoleInput();
+
+            return;
+        }
+
+
+        string error;
+
+        if (!SephiriaMod
+                .TrySendArchipelagoConsoleCommand(
+                    command,
+                    out error))
+        {
+            AddLocalConsoleLine(
+                "[Local] " + error
+            );
+        }
+
+        RefreshConsoleOutput();
+
+        ReactivateConsoleInput();
+    }
+
+
+    private void AddLocalConsoleHelp()
+    {
+        AddLocalConsoleLine(
+            "Allowed commands:"
+        );
+
+        AddLocalConsoleLine(
+            "!hint [item]"
+        );
+
+        AddLocalConsoleLine(
+            "!hint_location [location]"
+        );
+
+        AddLocalConsoleLine(
+            "!missing [filter]"
+        );
+
+        AddLocalConsoleLine(
+            "!checked [filter]"
+        );
+
+        AddLocalConsoleLine(
+            "!remaining"
+        );
+
+        AddLocalConsoleLine(
+            "!players"
+        );
+
+        AddLocalConsoleLine(
+            "!status [tag]"
+        );
+
+        AddLocalConsoleLine(
+            "clear"
+        );
+    }
+
+
+    private void AddLocalConsoleLine(
+        string line)
+    {
+        // Local console messages can use the same global
+        // history without ever being sent to the server.
+        SephiriaMod
+            .AddArchipelagoLocalConsoleLine(
+                line
+            );
+    }
+
+
+    private void ReactivateConsoleInput()
+    {
+        if (consoleInputField == null)
+            return;
+
+        consoleInputField.text = "";
+
+        consoleInputField.Select();
+
+        consoleInputField.ActivateInputField();
+    }
+
+    private void RefreshConsoleOutput()
+    {
+        if (consoleOutputText == null ||
+            consoleScrollContentRect == null ||
+            consoleScrollRect == null)
+        {
+            return;
+        }
+
+        ApplyConsolePresentation();
+
+        List<string> history =
+            SephiriaMod
+                .GetArchipelagoConsoleHistory();
+
+        string output =
+            history.Count > 0
+                ? string.Join(
+                    "\n",
+                    history.ToArray()
+                )
+                : "Type help for available commands.";
+
+        consoleOutputText.text =
+            output;
+
+        lastConsoleHistoryVersion =
+            SephiriaMod
+                .GetArchipelagoConsoleHistoryVersion();
+
+
+        float availableWidth =
+            consoleScrollRect
+                .viewport
+                .rect
+                .width;
+
+        if (availableWidth <= 0f)
+            return;
+
+        Vector2 preferred =
+            consoleOutputText.GetPreferredValues(
+                output,
+                availableWidth,
+                0f
+            );
+
+        float minimumHeight =
+            consoleScrollRect
+                .viewport
+                .rect
+                .height;
+
+        float contentHeight =
+            Mathf.Max(
+                minimumHeight,
+                preferred.y + 8f
+            );
+
+
+        consoleScrollContentRect.sizeDelta =
+            new Vector2(
+                0f,
+                contentHeight
+            );
+
+        consoleOutputText.rectTransform.sizeDelta =
+            new Vector2(
+                0f,
+                contentHeight
+            );
+
+
+        // 0 = bottom for a vertical ScrollRect.
+        consoleScrollRect
+            .verticalNormalizedPosition = 0f;
+    }
+
+    private void BuildConsoleContent()
+    {
+        if (secondaryContentRoot == null)
+            return;
+
+        UI_MessageBox_InputYesNo inputPopup =
+            UIManager.Instance
+                .GetElement<UI_MessageBox_InputYesNo>();
+
+        if (inputPopup == null ||
+            inputPopup.input == null)
+        {
+            MelonLogger.Warning(
+                "[AP Journal] Could not find a TMP input " +
+                "template for the AP Console."
+            );
+
+            return;
+        }
+
+
+        // =================================================
+        // Console root
+        // =================================================
+
+        consoleContentRoot =
+            new GameObject(
+                "ArchipelagoConsoleContent",
+                typeof(RectTransform)
+            );
+
+        RectTransform consoleRect =
+            consoleContentRoot
+                .GetComponent<RectTransform>();
+
+        consoleRect.SetParent(
+            secondaryContentRoot.transform,
+            false
+        );
+
+        consoleRect.anchorMin =
+            new Vector2(0f, 0f);
+
+        consoleRect.anchorMax =
+            new Vector2(1f, 1f);
+
+        consoleRect.offsetMin =
+            Vector2.zero;
+
+        consoleRect.offsetMax =
+            Vector2.zero;
+
+
+        // =================================================
+        // Scroll area
+        // =================================================
+
+        GameObject scrollObject =
+            new GameObject(
+                "ConsoleScroll",
+                typeof(RectTransform),
+                typeof(Image),
+                typeof(ScrollRect)
+            );
+
+        RectTransform scrollRectTransform =
+            scrollObject
+                .GetComponent<RectTransform>();
+
+        scrollRectTransform.SetParent(
+            consoleContentRoot.transform,
+            false
+        );
+
+        scrollRectTransform.anchorMin =
+            new Vector2(0f, 0f);
+
+        scrollRectTransform.anchorMax =
+            new Vector2(1f, 1f);
+
+        // Leave room for title above and input below.
+        scrollRectTransform.offsetMin =
+            new Vector2(
+                18f,
+                30f
+            );
+
+        scrollRectTransform.offsetMax =
+            new Vector2(
+                -18f,
+                -78f
+            );
+
+        Image scrollImage =
+            scrollObject.GetComponent<Image>();
+
+        scrollImage.color =
+            new UnityEngine.Color(
+                0f,
+                0f,
+                0f,
+                0f
+            );
+
+        scrollImage.raycastTarget =
+            true;
+
+        consoleScrollRect =
+            scrollObject.GetComponent<ScrollRect>();
+
+        consoleScrollRect.horizontal =
+            false;
+
+        consoleScrollRect.vertical =
+            true;
+
+        consoleScrollRect.movementType =
+            ScrollRect.MovementType.Clamped;
+
+        consoleScrollRect.scrollSensitivity =
+            1f;
+
+
+        // =================================================
+        // Viewport
+        // =================================================
+
+        GameObject viewportObject =
+            new GameObject(
+                "Viewport",
+                typeof(RectTransform),
+                typeof(RectMask2D)
+            );
+
+        RectTransform viewportRect =
+            viewportObject
+                .GetComponent<RectTransform>();
+
+        viewportRect.SetParent(
+            scrollObject.transform,
+            false
+        );
+
+        viewportRect.anchorMin =
+            new Vector2(0f, 0f);
+
+        viewportRect.anchorMax =
+            new Vector2(1f, 1f);
+
+        viewportRect.offsetMin =
+            Vector2.zero;
+
+        viewportRect.offsetMax =
+            Vector2.zero;
+
+
+        // =================================================
+        // Scroll content
+        // =================================================
+
+        GameObject contentObject =
+            new GameObject(
+                "Content",
+                typeof(RectTransform)
+            );
+
+        consoleScrollContentRect =
+            contentObject
+                .GetComponent<RectTransform>();
+
+        consoleScrollContentRect.SetParent(
+            viewportObject.transform,
+            false
+        );
+
+        consoleScrollContentRect.anchorMin =
+            new Vector2(0f, 1f);
+
+        consoleScrollContentRect.anchorMax =
+            new Vector2(1f, 1f);
+
+        consoleScrollContentRect.pivot =
+            new Vector2(0.5f, 1f);
+
+        consoleScrollContentRect.anchoredPosition =
+            Vector2.zero;
+
+
+        // =================================================
+        // Output text
+        // =================================================
+
+        GameObject outputObject =
+            UnityEngine.Object.Instantiate(
+                layout.loreInfo_Description.gameObject,
+                contentObject.transform
+            );
+
+        outputObject.name =
+            "ArchipelagoConsoleOutput";
+
+        DisableJournalLocalization(
+            outputObject
+        );
+
+        consoleOutputText =
+            outputObject
+                .GetComponent<TextMeshProUGUI>();
+
+        RectTransform outputRect =
+            outputObject
+                .GetComponent<RectTransform>();
+
+        outputRect.anchorMin =
+            new Vector2(0f, 1f);
+
+        outputRect.anchorMax =
+            new Vector2(1f, 1f);
+
+        outputRect.pivot =
+            new Vector2(0.5f, 1f);
+
+        outputRect.anchoredPosition =
+            new Vector2(
+                0f,
+                -3f
+            );
+
+        consoleOutputText.alignment =
+            TextAlignmentOptions.TopLeft;
+
+        consoleOutputText.fontSize = 7f;
+
+        consoleOutputText.margin =
+            new Vector4(
+                2f,
+                2f,
+                2f,
+                2f
+            );
+
+        consoleOutputText.enableWordWrapping =
+            true;
+
+        consoleOutputText.richText =
+            false;
+
+        consoleOutputText.raycastTarget =
+            false;
+
+
+        consoleScrollRect.viewport =
+            viewportRect;
+
+        consoleScrollRect.content =
+            consoleScrollContentRect;
+
+
+        // =================================================
+        // Input
+        // =================================================
+
+        GameObject inputObject =
+            UnityEngine.Object.Instantiate(
+                inputPopup.input.gameObject,
+                consoleContentRoot.transform
+            );
+
+        inputObject.name =
+            "ArchipelagoConsoleInput";
+
+        consoleInputField =
+            inputObject.GetComponent<TMP_InputField>();
+
+        RectTransform inputRect =
+            inputObject.GetComponent<RectTransform>();
+
+        inputRect.anchorMin =
+            new Vector2(0f, 0f);
+
+        inputRect.anchorMax =
+            new Vector2(0.65f, 0f);
+
+        inputRect.pivot =
+            new Vector2(0.5f, 0f);
+
+        inputRect.offsetMin =
+            new Vector2(
+                18f,
+                7f
+            );
+
+        inputRect.offsetMax =
+            new Vector2(
+                -6f,
+                29f
+            );
+
+
+        consoleInputField.text = "";
+
+        consoleInputField.characterLimit =
+            200;
+
+        consoleInputField.contentType =
+            TMP_InputField.ContentType.Standard;
+
+        consoleInputField.lineType =
+            TMP_InputField.LineType.SingleLine;
+
+        if (consoleInputField.textComponent != null)
+        {
+            consoleInputField.textComponent.fontSize =
+                7f;
+        }
+
+        TMP_Text placeholder = consoleInputField.placeholder as TMP_Text;
+
+        if (placeholder != null)
+        {
+            placeholder.text =
+                "Type a command...  (help for commands)";
+
+            placeholder.fontSize =
+                6.5f;
+        }
+
+        // Remove anything inherited from the popup field.
+        consoleInputField
+            .onSubmit
+            .RemoveAllListeners();
+
+        consoleInputField
+            .onEndEdit
+            .RemoveAllListeners();
+
+        consoleInputField
+            .onSubmit
+            .AddListener(
+                SubmitConsoleCommand
+            );
+
+
+        consoleContentRoot.SetActive(false);
+    }
+
+    private void DisableBossRewardsPanelContents(
+        Transform root)
+    {
+        if (root == null)
+            return;
+
+        Button[] buttons =
+            root.GetComponentsInChildren<Button>(
+                true
+            );
+
+        foreach (Button button in buttons)
+        {
+            if (button != null)
+            {
+                button.gameObject.SetActive(
+                    false
+                );
+            }
+        }
+
+        Scrollbar[] scrollbars =
+            root.GetComponentsInChildren<Scrollbar>(
+                true
+            );
+
+        foreach (Scrollbar scrollbar in scrollbars)
+        {
+            if (scrollbar != null)
+            {
+                scrollbar.gameObject.SetActive(
+                    false
+                );
+            }
+        }
+
+        TextMeshProUGUI[] texts =
+            root.GetComponentsInChildren<
+                TextMeshProUGUI>(
+                    true
+                );
+
+        foreach (TextMeshProUGUI text in texts)
+        {
+            if (text != null)
+            {
+                text.gameObject.SetActive(
+                    false
+                );
+            }
+        }
+    }
+
+    private void HideSecondaryContentDivider(
+        Transform clonedRoot)
+    {
+        if (clonedRoot == null ||
+            bossRewardsContentTemplateRoot == null ||
+            layout == null ||
+            layout.locationIconContainer == null ||
+            layout.loreIconContainer == null)
+        {
+            return;
+        }
+
+        RectTransform templateRootRect =
+            bossRewardsContentTemplateRoot
+                .GetComponent<RectTransform>();
+
+        RectTransform clonedRootRect =
+            clonedRoot
+                .GetComponent<RectTransform>();
+
+        RectTransform leftContentRect =
+            layout.locationIconContainer
+                .GetComponent<RectTransform>();
+
+        RectTransform rightContentRect =
+            layout.loreIconContainer
+                .GetComponent<RectTransform>();
+
+        if (templateRootRect == null ||
+            clonedRootRect == null ||
+            leftContentRect == null ||
+            rightContentRect == null)
+        {
+            return;
+        }
+
+
+        // -------------------------------------------------
+        // Work out where Boss Rewards actually splits its
+        // left and right columns.
+        // -------------------------------------------------
+
+        Bounds leftBounds =
+            GetJournalBoundsRelativeTo(
+                leftContentRect,
+                templateRootRect
+            );
+
+        Bounds rightBounds =
+            GetJournalBoundsRelativeTo(
+                rightContentRect,
+                templateRootRect
+            );
+
+        float dividerX =
+            (
+                leftBounds.max.x +
+                rightBounds.min.x
+            ) / 2f;
+
+
+        float rootWidth =
+            clonedRootRect.rect.width;
+
+        float rootHeight =
+            clonedRootRect.rect.height;
+
+
+        // -------------------------------------------------
+        // Find the narrow/tall image located at that split.
+        //
+        // This avoids relying on a guessed GameObject name.
+        // -------------------------------------------------
+
+        Image[] images =
+            clonedRoot.GetComponentsInChildren<Image>(
+                true
+            );
+
+        foreach (Image image in images)
+        {
+            if (image == null)
+                continue;
+
+            RectTransform imageRect =
+                image.rectTransform;
+
+            Bounds imageBounds =
+                GetJournalBoundsRelativeTo(
+                    imageRect,
+                    clonedRootRect
+                );
+
+            float imageWidth =
+                imageBounds.size.x;
+
+            float imageHeight =
+                imageBounds.size.y;
+
+            float distanceFromDivider =
+                Mathf.Abs(
+                    imageBounds.center.x -
+                    dividerX
+                );
+
+            bool isNarrow =
+                imageWidth <=
+                rootWidth * 0.08f;
+
+            bool isTall =
+                imageHeight >=
+                rootHeight * 0.50f;
+
+            bool isAtDivider =
+                distanceFromDivider <=
+                rootWidth * 0.08f;
+
+            if (isNarrow &&
+                isTall &&
+                isAtDivider)
+            {
+                image.gameObject.SetActive(
+                    false
+                );
+            }
+        }
+    }
+
+
+    private Bounds GetJournalBoundsRelativeTo(
+        RectTransform rect,
+        Transform relativeTo)
+    {
+        Vector3[] worldCorners =
+            new Vector3[4];
+
+        rect.GetWorldCorners(
+            worldCorners
+        );
+
+        Vector3 firstPoint =
+            relativeTo.InverseTransformPoint(
+                worldCorners[0]
+            );
+
+        Bounds bounds =
+            new Bounds(
+                firstPoint,
+                Vector3.zero
+            );
+
+        for (int i = 1;
+             i < worldCorners.Length;
+             i++)
+        {
+            Vector3 point =
+                relativeTo.InverseTransformPoint(
+                    worldCorners[i]
+                );
+
+            bounds.Encapsulate(
+                point
+            );
+        }
+
+        return bounds;
+    }
+
+    private void ReserveBossRewardsSpace(
+        float tabHeight)
+    {
+        bossRewardsSectionRoots.Clear();
+
+        RegisterBossRewardsSection(
+            layout.locationIconContainer
+        );
+
+        RegisterBossRewardsSection(
+            layout.loreIconContainer
+        );
+
+
+        // -------------------------------------------------
+        // Save the large Boss Rewards panel as the visual
+        // template for Anvil / Console.
+        //
+        // locationIconContainer and loreIconContainer should
+        // both resolve to the same top-level content panel.
+        // -------------------------------------------------
+
+        bossRewardsContentTemplateRoot = null;
+
+        if (bossRewardsSectionRoots.Count == 1)
+        {
+            foreach (GameObject section
+                in bossRewardsSectionRoots)
+            {
+                bossRewardsContentTemplateRoot =
+                    section;
+
+                break;
+            }
+        }
+        else
+        {
+            MelonLogger.Warning(
+                "[AP Journal] Expected one shared Boss Rewards " +
+                "content root, but found " +
+                bossRewardsSectionRoots.Count +
+                ". Anvil/Console background was not assigned."
+            );
+        }
+
+
+        foreach (GameObject section
+            in bossRewardsSectionRoots)
+        {
+            if (section == null)
+                continue;
+
+            RectTransform rect =
+                section.GetComponent<RectTransform>();
+
+            if (rect == null)
+                continue;
+
+            Vector2 offsetMax =
+                rect.offsetMax;
+
+            offsetMax.y -=
+                tabHeight;
+
+            rect.offsetMax =
+                offsetMax;
+        }
+    }
+
+    private void DisableJournalLocalization(
+        GameObject root)
+    {
+        if (root == null)
+            return;
+
+        MonoBehaviour[] behaviours =
+            root.GetComponentsInChildren<
+                MonoBehaviour>(
+                    true
+                );
+
+        foreach (MonoBehaviour behaviour
+            in behaviours)
+        {
+            if (behaviour == null)
+                continue;
+
+            if (behaviour.GetType().Name ==
+                "UI_LocalizationStringText")
+            {
+                behaviour.enabled = false;
+            }
+        }
+    }
+
+    public void ConfigureNavigation(
+        Button topTabButton)
     {
         if (topTabButton == null)
             return;
@@ -8078,9 +13156,8 @@ public class ArchipelagoJournalContentController : MonoBehaviour
                 ? bossRewardsClickable
                 : firstFloorButton;
 
-        // ---------------------------------------------
-        // AP top tab
-        // ---------------------------------------------
+
+        // AP top button.
 
         Selectable left =
             topTabButton.FindSelectableOnLeft();
@@ -8106,15 +13183,17 @@ public class ArchipelagoJournalContentController : MonoBehaviour
         topTabButton.navigation =
             topNavigation;
 
+
         if (bossRewardsClickable == null ||
-            upgradesClickable == null)
+            anvilClickable == null ||
+            consoleClickable == null ||
+            hintsClickable == null)
         {
             return;
         }
 
-        // ---------------------------------------------
+
         // Boss Rewards
-        // ---------------------------------------------
 
         Navigation bossNavigation =
             bossRewardsClickable.navigation;
@@ -8123,8 +13202,9 @@ public class ArchipelagoJournalContentController : MonoBehaviour
             Navigation.Mode.Explicit;
 
         bossNavigation.selectOnLeft = null;
+
         bossNavigation.selectOnRight =
-            upgradesClickable;
+            anvilClickable;
 
         bossNavigation.selectOnUp =
             topTabButton;
@@ -8135,33 +13215,98 @@ public class ArchipelagoJournalContentController : MonoBehaviour
         bossRewardsClickable.navigation =
             bossNavigation;
 
-        // ---------------------------------------------
-        // Upgrades
-        // ---------------------------------------------
 
-        Navigation upgradesNavigation =
-            upgradesClickable.navigation;
+        // Anvil
 
-        upgradesNavigation.mode =
+        Navigation anvilNavigation =
+            anvilClickable.navigation;
+
+        anvilNavigation.mode =
             Navigation.Mode.Explicit;
 
-        upgradesNavigation.selectOnLeft =
+        anvilNavigation.selectOnLeft =
             bossRewardsClickable;
 
-        upgradesNavigation.selectOnRight = null;
+        anvilNavigation.selectOnRight =
+            consoleClickable;
 
-        upgradesNavigation.selectOnUp =
+        anvilNavigation.selectOnUp =
             topTabButton;
 
-        // Empty for now.
-        upgradesNavigation.selectOnDown = null;
+        anvilNavigation.selectOnDown =
+            null;
 
-        upgradesClickable.navigation =
-            upgradesNavigation;
+        anvilClickable.navigation =
+            anvilNavigation;
 
-        // ---------------------------------------------
-        // First floor -> back to Boss Rewards
-        // ---------------------------------------------
+
+        // Console
+
+        Navigation consoleNavigation =
+            consoleClickable.navigation;
+
+        consoleNavigation.mode =
+            Navigation.Mode.Explicit;
+
+        consoleNavigation.selectOnLeft =
+            anvilClickable;
+
+        consoleNavigation.selectOnRight =
+            hintsClickable;
+
+        consoleNavigation.selectOnUp =
+            topTabButton;
+
+        // Later this points to the command input.
+        consoleNavigation.selectOnDown =
+            consoleInputField;
+
+        consoleClickable.navigation =
+            consoleNavigation;
+
+        if (consoleInputField != null)
+        {
+            Navigation inputNavigation =
+                consoleInputField.navigation;
+
+            inputNavigation.mode =
+                Navigation.Mode.Explicit;
+
+            inputNavigation.selectOnUp =
+                consoleClickable;
+
+            inputNavigation.selectOnDown =
+                null;
+
+            consoleInputField.navigation =
+                inputNavigation;
+        }
+
+        if (hintsClickable != null)
+        {
+            Navigation hintsNavigation =
+                hintsClickable.navigation;
+
+            hintsNavigation.mode =
+                Navigation.Mode.Explicit;
+
+            hintsNavigation.selectOnLeft =
+                consoleClickable;
+
+            hintsNavigation.selectOnRight =
+                null;
+
+            hintsNavigation.selectOnUp =
+                topTabButton;
+
+            hintsNavigation.selectOnDown =
+                null;
+
+            hintsClickable.navigation =
+                hintsNavigation;
+        }
+
+        // First floor button back to Boss Rewards.
 
         if (firstFloorButton != null)
         {
@@ -8244,45 +13389,6 @@ public class ArchipelagoJournalContentController : MonoBehaviour
         }
     }
 
-    private void ReserveBossRewardsSpace(
-        float tabHeight)
-    {
-        bossRewardsSectionRoots.Clear();
-
-        RegisterBossRewardsSection(
-            layout.locationIconContainer
-        );
-
-        RegisterBossRewardsSection(
-            layout.loreIconContainer
-        );
-
-        foreach (GameObject section
-            in bossRewardsSectionRoots)
-        {
-            if (section == null)
-                continue;
-
-            RectTransform rect =
-                section.GetComponent<RectTransform>();
-
-            if (rect == null)
-                continue;
-
-            // Keep the bottom exactly where it is.
-            // Only move the top downward enough to make
-            // room for the new subtab row.
-            Vector2 offsetMax =
-                rect.offsetMax;
-
-            offsetMax.y -=
-                tabHeight;
-
-            rect.offsetMax =
-                offsetMax;
-        }
-    }
-
     private void RegisterBossRewardsSection(
         Transform child)
     {
@@ -8319,17 +13425,35 @@ public class ArchipelagoJournalContentController : MonoBehaviour
         );
     }
 
-    private void ShowBossRewards()
+    private void SetBossRewardsSectionsVisible(
+        bool visible)
     {
-        showingUpgrades = false;
-
         foreach (GameObject section
             in bossRewardsSectionRoots)
         {
             if (section != null)
             {
-                section.SetActive(true);
+                section.SetActive(
+                    visible
+                );
             }
+        }
+    }
+
+    private void ShowBossRewards()
+    {
+        currentSubTab =
+            ArchipelagoJournalSubTab.BossRewards;
+
+        SetBossRewardsSectionsVisible(
+            true
+        );
+
+        if (secondaryContentRoot != null)
+        {
+            secondaryContentRoot.SetActive(
+                false
+            );
         }
 
         UpdateSubTabVisuals();
@@ -8348,39 +13472,413 @@ public class ArchipelagoJournalContentController : MonoBehaviour
         }
     }
 
-    private void ShowUpgrades()
+    private void ShowAnvil()
     {
-        showingUpgrades = true;
+        currentSubTab =
+            ArchipelagoJournalSubTab.Anvil;
 
-        foreach (GameObject section
-            in bossRewardsSectionRoots)
-        {
-            if (section != null)
-            {
-                section.SetActive(false);
-            }
-        }
+        SetBossRewardsSectionsVisible(
+            false
+        );
 
-        // Upgrades has no content yet.
-        if (layout != null &&
-            layout.loreInfo != null)
-        {
-            layout.loreInfo.SetActive(false);
-        }
+        HideBossInfoPanel();
+
+        RefreshAnvilContent();
 
         UpdateSubTabVisuals();
     }
+
+    private void ApplyConsolePresentation()
+    {
+        if (consoleOutputText != null)
+        {
+            consoleOutputText.fontSize =
+                7f;
+
+            consoleOutputText.richText =
+                false;
+        }
+
+        if (consoleScrollRect != null)
+        {
+            RectTransform scrollRect =
+                consoleScrollRect
+                    .GetComponent<RectTransform>();
+
+            if (scrollRect != null)
+            {
+                Vector2 offsetMin =
+                    scrollRect.offsetMin;
+
+                // Leave room for the Console input box.
+                offsetMin.y =
+                    30f;
+
+                scrollRect.offsetMin =
+                    offsetMin;
+            }
+        }
+    }
+
+
+    private void ApplyHintsPresentation()
+    {
+        if (consoleOutputText != null)
+        {
+            consoleOutputText.fontSize =
+                6.5f;
+
+            // Required for <color=...>FOUND</color>.
+            consoleOutputText.richText =
+                true;
+        }
+
+        if (consoleScrollRect != null)
+        {
+            RectTransform scrollRect =
+                consoleScrollRect
+                    .GetComponent<RectTransform>();
+
+            if (scrollRect != null)
+            {
+                Vector2 offsetMin =
+                    scrollRect.offsetMin;
+
+                // Hints has no input field, so use
+                // nearly all of the bottom space.
+                offsetMin.y =
+                    8f;
+
+                scrollRect.offsetMin =
+                    offsetMin;
+            }
+        }
+    }
+
+    private void ShowConsole()
+    {
+        currentSubTab =
+            ArchipelagoJournalSubTab.Console;
+
+        SetBossRewardsSectionsVisible(
+            false
+        );
+
+        HideBossInfoPanel();
+
+
+        if (secondaryContentRoot != null)
+        {
+            secondaryContentRoot.SetActive(
+                true
+            );
+        }
+
+
+        if (secondaryContentTitleText != null)
+        {
+            secondaryContentTitleText
+                .gameObject
+                .SetActive(true);
+
+            secondaryContentTitleText.text =
+                "Console";
+        }
+
+
+        // Anvil's normal body isn't used here.
+        if (secondaryContentBodyText != null)
+        {
+            secondaryContentBodyText
+                .gameObject
+                .SetActive(false);
+        }
+
+
+        if (consoleContentRoot != null)
+        {
+            consoleContentRoot.SetActive(true);
+        }
+
+        if (consoleInputField != null)
+        {
+            consoleInputField
+                .gameObject
+                .SetActive(true);
+        }
+
+        ApplyConsolePresentation();
+
+        RefreshConsoleOutput();
+
+        UpdateSubTabVisuals();
+
+        ReactivateConsoleInput();
+    }
+
+    private void ShowHints()
+    {
+        currentSubTab =
+            ArchipelagoJournalSubTab.Hints;
+
+        SetBossRewardsSectionsVisible(
+            false
+        );
+
+        HideBossInfoPanel();
+
+
+        if (secondaryContentRoot != null)
+        {
+            secondaryContentRoot.SetActive(
+                true
+            );
+        }
+
+
+        if (secondaryContentTitleText != null)
+        {
+            secondaryContentTitleText
+                .gameObject
+                .SetActive(true);
+
+            secondaryContentTitleText.text =
+                "Hints";
+        }
+
+
+        if (secondaryContentBodyText != null)
+        {
+            secondaryContentBodyText
+                .gameObject
+                .SetActive(false);
+        }
+
+
+        if (consoleContentRoot != null)
+        {
+            consoleContentRoot.SetActive(
+                true
+            );
+        }
+
+
+        if (consoleInputField != null)
+        {
+            consoleInputField
+                .gameObject
+                .SetActive(false);
+        }
+
+        ApplyHintsPresentation();
+
+        RefreshHintsOutput();
+
+        UpdateSubTabVisuals();
+    }
+
+    private void RefreshHintsOutput()
+    {
+        if (consoleOutputText == null ||
+            consoleScrollContentRect == null ||
+            consoleScrollRect == null)
+        {
+            return;
+        }
+
+        ApplyHintsPresentation();
+
+        List<string> entries = SephiriaMod
+            .GetArchipelagoHintEntries();
+
+        string output =
+            entries.Count > 0
+                ? string.Join(
+                    "\n\n",
+                    entries.ToArray()
+                )
+                : "No hints have been unlocked yet.";
+
+
+        consoleOutputText.text =
+            output;
+
+        lastHintHistoryVersion =
+            SephiriaMod
+                .GetArchipelagoHintHistoryVersion();
+
+
+        float availableWidth =
+            consoleScrollRect
+                .viewport
+                .rect
+                .width;
+
+        if (availableWidth <= 0f)
+            return;
+
+        Vector2 preferred =
+            consoleOutputText.GetPreferredValues(
+                output,
+                availableWidth,
+                0f
+            );
+
+        float minimumHeight =
+            consoleScrollRect
+                .viewport
+                .rect
+                .height;
+
+        float contentHeight =
+            Mathf.Max(
+                minimumHeight,
+                preferred.y + 8f
+            );
+
+
+        consoleScrollContentRect.sizeDelta =
+            new Vector2(
+                0f,
+                contentHeight
+            );
+
+        consoleOutputText.rectTransform.sizeDelta =
+            new Vector2(
+                0f,
+                contentHeight
+            );
+
+        consoleScrollRect
+            .verticalNormalizedPosition = 1f;
+    }
+
+    private void HideBossInfoPanel()
+    {
+        if (layout != null &&
+            layout.loreInfo != null)
+        {
+            layout.loreInfo.SetActive(
+                false
+            );
+        }
+    }
+
+
+    private void ShowSecondaryContent(
+        string title,
+        string body)
+    {
+        if (consoleContentRoot != null)
+        {
+            consoleContentRoot.SetActive(false);
+        }
+
+        if (secondaryContentTitleText != null)
+        {
+            secondaryContentTitleText
+                .gameObject
+                .SetActive(true);
+        }
+
+        if (secondaryContentBodyText != null)
+        {
+            secondaryContentBodyText
+                .gameObject
+                .SetActive(true);
+        }
+
+        if (secondaryContentRoot != null)
+        {
+            secondaryContentRoot.SetActive(
+                true
+            );
+        }
+
+        if (secondaryContentTitleText != null)
+        {
+            secondaryContentTitleText.text =
+                title ?? "";
+        }
+
+        if (secondaryContentBodyText != null)
+        {
+            secondaryContentBodyText.text =
+                body ?? "";
+        }
+    }
+
+
+    private void RefreshAnvilContent()
+    {
+        if (!SephiriaMod.IsArchipelagoConnected)
+        {
+            ShowSecondaryContent(
+                "Progressive Anvil Unlock",
+                "Archipelago is disconnected."
+            );
+
+            return;
+        }
+
+        int anvilUnlockCount =
+            SephiriaMod
+                .GetProgressiveAnvilUpgradeCount();
+
+        string firstState =
+            anvilUnlockCount >= 1
+                ? "<color=#00FF00>UNLOCKED</color>"
+                : "LOCKED";
+
+        string secondState =
+            anvilUnlockCount >= 2
+                ? "<color=#00FF00>UNLOCKED</color>"
+                : "LOCKED";
+
+        string body =
+            "Progressive Anvil Unlocks: " +
+            anvilUnlockCount +
+            "/2" +
+            "\n\n" +
+            "Anvil Unlock I" +
+            "\n" +
+            firstState +
+            "\n\n" +
+            "Anvil Unlock II" +
+            "\n" +
+            secondState;
+
+        ShowSecondaryContent(
+            "Progressive Anvil Unlock",
+            body
+        );
+    }
+
 
     private void UpdateSubTabVisuals()
     {
         SetInnerTabActive(
             bossRewardsTabButton,
-            !showingUpgrades
+            currentSubTab ==
+                ArchipelagoJournalSubTab.BossRewards
         );
 
         SetInnerTabActive(
-            upgradesTabButton,
-            showingUpgrades
+            anvilTabButton,
+            currentSubTab ==
+                ArchipelagoJournalSubTab.Anvil
+        );
+
+        SetInnerTabActive(
+            consoleTabButton,
+            currentSubTab ==
+                ArchipelagoJournalSubTab.Console
+        );
+
+        SetInnerTabActive(
+            hintsTabButton,
+            currentSubTab ==
+                ArchipelagoJournalSubTab.Hints
         );
     }
 
@@ -8495,11 +13993,6 @@ public class ArchipelagoJournalContentController : MonoBehaviour
 
         BuildBossButtons(
             SelectedFloor
-        );
-
-        MelonLogger.Msg(
-            $"[AP Journal] Selected floor " +
-            $"{SelectedFloor}."
         );
     }
 
@@ -8779,12 +14272,6 @@ public class ArchipelagoJournalContentController : MonoBehaviour
         }
 
         layout.loreInfo.SetActive(true);
-
-        MelonLogger.Msg(
-            $"[AP Journal] Selected boss " +
-            $"{bossName} | " +
-            $"{(unlocked ? "UNLOCKED" : "LOCKED")}."
-        );
     }
 
     private void RefreshRewardStates()
@@ -8845,9 +14332,18 @@ public class ArchipelagoJournalContentController : MonoBehaviour
         }
 
         // Refresh the currently displayed boss too.
-        if (!showingUpgrades && !string.IsNullOrEmpty(selectedBossName))
+        if (currentSubTab ==
+            ArchipelagoJournalSubTab.BossRewards && !string.IsNullOrEmpty(
+                selectedBossName))
         {
-            ShowBossInfo(selectedBossName);
+            ShowBossInfo(
+                selectedBossName
+            );
+        }
+        else if (currentSubTab ==
+                 ArchipelagoJournalSubTab.Anvil)
+        {
+            RefreshAnvilContent();
         }
     }
 
@@ -8892,14 +14388,287 @@ public class ArchipelagoTreeShopModeController : MonoBehaviour
 
     private UI_TreeShopPanel panel;
 
+    private TextMeshProUGUI modeText;
 
-    public void Initialize(
-        UI_TreeShopPanel treeShopPanel)
+    public void Initialize(UI_TreeShopPanel treeShopPanel)
     {
         panel = treeShopPanel;
         IsTreeShopOpen = true;
+
+        Transform modeTextTransform =
+            panel.transform.Find(
+                "Text (TMP) (3)"
+            );
+
+        if (modeTextTransform != null)
+        {
+            modeText =
+                modeTextTransform
+                    .GetComponent<TextMeshProUGUI>();
+        }
+
+        if (modeText == null)
+        {
+            MelonLogger.Warning(
+                "[AP Tree] Could not find " +
+                "Destiny Inscription mode text."
+            );
+
+            return;
+        }
+
+        SephiriaMod.ArchipelagoPermanentRewardsChanged -= HandleReceivedUpgradesChanged;
+
+        SephiriaMod.ArchipelagoPermanentRewardsChanged += HandleReceivedUpgradesChanged;
+
+        RefreshModeHeader();
+        StartCoroutine(RefreshAfterOpen());
     }
 
+    private IEnumerator RefreshAfterOpen()
+    {
+        // Wait until vanilla has completely finished
+        // opening and rebuilding the Destiny Inscription.
+        yield return null;
+
+        if (!SephiriaMod.IsArchipelagoSave)
+            yield break;
+
+        if (!IsTreeShopOpen)
+            yield break;
+
+        if (panel == null ||
+            !panel.gameObject.activeInHierarchy)
+        {
+            yield break;
+        }
+
+        RefreshModeHeader();
+        RefreshTreeDisplay();
+        RefreshCurrentSelection();
+    }
+
+    private void RefreshModeHeader()
+    {
+        if (modeText == null)
+            return;
+
+        modeText.alignment =
+            TextAlignmentOptions.Center;
+
+        switch (CurrentMode)
+        {
+            case TreeMode.ArchipelagoTree:
+                modeText.text =
+                    "<alpha=#00>Q / LB  <  " +
+                    "<alpha=#FF>ARCHIPELAGO TREE" +
+                    "  >  E / RB";
+                break;
+
+            case TreeMode.ReceivedUpgrades:
+                modeText.text =
+                    "Q / LB  <  " +
+                    "RECEIVED UPGRADES" +
+                    "<alpha=#00>  >  E / RB" +
+                    "<alpha=#FF>";
+                break;
+        }
+    }
+
+    private void RefreshTreeDisplay()
+    {
+        if (panel == null)
+        {
+            MelonLogger.Warning(
+                "[AP Tree Refresh] panel is null."
+            );
+
+            return;
+        }
+
+        if (panel.treeShopContents == null)
+        {
+            MelonLogger.Warning(
+                "[AP Tree Refresh] treeShopContents is null."
+            );
+
+            return;
+        }
+
+        if (SaveManager.Current == null)
+        {
+            MelonLogger.Warning(
+                "[AP Tree Refresh] SaveManager.Current is null."
+            );
+
+            return;
+        }
+
+        // ---------------------------------------------
+        // PREVIEW GUIDE
+        // ---------------------------------------------
+        // AP Tree locations should not reveal the
+        // vanilla items contained inside UnlockItem nodes.
+        // Received Upgrades keeps vanilla preview behavior.
+        UI_TreeShopItem[] previewItems =
+            panel.treeShopContents
+                .GetComponentsInChildren<UI_TreeShopItem>(true);
+
+        foreach (UI_TreeShopItem item in previewItems)
+        {
+            if (item == null ||
+                item.connected == null ||
+                item.unlockItemPreviewerGuide == null)
+            {
+                continue;
+            }
+
+            bool showPreview =
+                CurrentMode ==
+                    TreeMode.ReceivedUpgrades &&
+                item.connected.behaviour ==
+                    TreeShopItemEntity.EBehaviour.UnlockItem;
+
+            item.unlockItemPreviewerGuide.SetActive(
+                showPreview
+            );
+        }
+
+        // ---------------------------------------------
+        // RECEIVED UPGRADES
+        // ---------------------------------------------
+        if (CurrentMode ==
+            TreeMode.ReceivedUpgrades)
+        {
+            UI_TreeShopItem[] items =
+                panel.treeShopContents
+                    .GetComponentsInChildren<
+                        UI_TreeShopItem
+                    >(true);
+
+            float contentHeight = 0f;
+
+            foreach (UI_TreeShopItem item in items)
+            {
+                if (item == null ||
+                    item.connected == null)
+                {
+                    continue;
+                }
+
+                // Root's Retreat belongs to the
+                // separate Hard Mode system.
+                if (item.connected.id == 3000)
+                    continue;
+
+                // We are in Received Upgrades mode,
+                // so the AP save-key redirect is OFF.
+                // This reads the REAL vanilla upgrade
+                // count granted by Archipelago.
+                int receivedCount =
+                    SaveManager.Current.GetInt(
+                        $"TreeShopItem_{item.connected.id}_PurchasedCount",
+                        0
+                    );
+
+                if (receivedCount > 0)
+                {
+                    // Received / partially received.
+                    item.SetVisible(1);
+                }
+                else
+                {
+                    // Not received.
+                    // Keep it visible, but grayscale it.
+                    item.SetVisible(2);
+                }
+
+                contentHeight =
+                    Mathf.Max(
+                        contentHeight,
+                        item.rectTransform
+                            .anchoredPosition.y + 90f
+                    );
+            }
+
+            // The vanilla tree normally sizes this based
+            // only on progression. Since Received Upgrades
+            // reveals the whole tree, make sure the entire
+            // tree can be scrolled through.
+            panel.treeShopContents.sizeDelta =
+                new Vector2(
+                    panel.treeShopContents.sizeDelta.x,
+                    contentHeight
+                );
+
+            return;
+        }
+
+        // ---------------------------------------------
+        // ARCHIPELAGO TREE
+        // ---------------------------------------------
+        // Restore Sephiria's normal visibility logic.
+        // Because CurrentMode is ArchipelagoTree here,
+        // its TreeShopItem save reads are automatically
+        // redirected to our AP-tree purchase state.
+        AccessTools.Method(
+            typeof(UI_TreeShopPanel),
+            "RefreshItemsVisibleFromUnlockValues"
+        )?.Invoke(panel, null);
+    }
+
+    private void HandleReceivedUpgradesChanged()
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        if (!IsTreeShopOpen)
+            return;
+
+        if (CurrentMode !=
+            TreeMode.ReceivedUpgrades)
+        {
+            return;
+        }
+
+        RefreshTreeDisplay();
+        RefreshCurrentSelection();
+    }
+
+    private void OnDestroy()
+    {
+        SephiriaMod.ArchipelagoPermanentRewardsChanged -=
+            HandleReceivedUpgradesChanged;
+    }
+
+    private void RefreshCurrentSelection()
+    {
+        if (panel == null)
+            return;
+
+        UI_TreeShopItem selectedItem =
+            AccessTools.Field(
+                typeof(UI_TreeShopPanel),
+                "currentSelected"
+            )
+            .GetValue(panel)
+            as UI_TreeShopItem;
+
+        if (selectedItem == null)
+            return;
+
+        AccessTools.Method(
+            typeof(UI_TreeShopPanel),
+            "HandleItemSelected"
+        )
+        .Invoke(
+            panel,
+            new object[]
+            {
+            selectedItem
+            }
+        );
+    }
 
     public static void PrepareForOpen()
     {
@@ -8987,7 +14756,11 @@ public class ArchipelagoTreeShopModeController : MonoBehaviour
         CurrentMode =
             TreeMode.ArchipelagoTree;
 
-        MelonLogger.Msg(
+        RefreshModeHeader();
+        RefreshTreeDisplay();
+        RefreshCurrentSelection();
+
+        APDebug.Log(
             "[AP Tree] Mode: Archipelago Tree"
         );
     }
@@ -9004,7 +14777,11 @@ public class ArchipelagoTreeShopModeController : MonoBehaviour
         CurrentMode =
             TreeMode.ReceivedUpgrades;
 
-        MelonLogger.Msg(
+        RefreshModeHeader();
+        RefreshTreeDisplay();
+        RefreshCurrentSelection();
+
+        APDebug.Log(
             "[AP Tree] Mode: Received Upgrades"
         );
     }
@@ -9015,6 +14792,9 @@ public static class ArchipelagoTreeShopSaveRedirect
     public static string RedirectKey(
         string key)
     {
+        if (SephiriaMod.IsSynchronizingArchipelagoDestinyUpgrades)
+            return key;
+
         if (!SephiriaMod.IsArchipelagoSave)
             return key;
 
@@ -9112,10 +14892,6 @@ public static class ArchipelagoSaveChoicePatch
                     SaveManager.Current.SetBool(
                         "ArchipelagoSave",
                         false
-                    );
-
-                    MelonLogger.Msg(
-                        "[DEBUG] Created normal save."
                     );
 
                     continueAfterChoice = true;
@@ -9261,9 +15037,8 @@ public static class ArchipelagoSaveChoicePatch
                      existingSave.Save();
 
                      MelonLogger.Msg(
-                         $"[DEBUG] Updated AP save settings: " +
-                         $"{hostValue}:{port}, Slot={slotName}"
-                     );
+                        "[AP Save] Connection settings updated."
+                    );
 
                      // AP is already connected successfully.
                      // Allow Sephiria's normal CheckAndStart to continue
@@ -9320,8 +15095,7 @@ public static class ArchipelagoSaveChoicePatch
                  SephiriaMod.QueueHardModeSync();
 
                  MelonLogger.Msg(
-                     $"[DEBUG] AP save configured: " +
-                     $"{hostValue}:{port}, Slot={slotName}"
+                     "[AP Save] Archipelago save configured."
                  );
 
                  continueAfterChoice = true;
@@ -9762,7 +15536,7 @@ public static class ArchipelagoSaveProfileButtonPatch
                 existingIcon.gameObject
             );
 
-            MelonLogger.Msg(
+            APDebug.Log(
                 $"[AP Save Icon] Removed icon from " +
                 $"{button.slotName}"
             );
@@ -9788,7 +15562,7 @@ public static class ArchipelagoSaveProfileButtonPatch
             return;
         }
 
-        MelonLogger.Msg(
+        APDebug.Log(
             $"[AP Save Icon] Found AP save: " +
             $"{__instance.slotName}"
         );
@@ -9974,7 +15748,7 @@ public static class ArchipelagoSaveProfileButtonPatch
         // Keep it above the other contents of the save box.
         iconObject.transform.SetAsLastSibling();
 
-        MelonLogger.Msg(
+        APDebug.Log(
             $"[AP Save Icon] Created icon for " +
             $"{__instance.slotName}"
         );
@@ -10153,6 +15927,8 @@ public static class NewGamePatch
         if (!SephiriaMod.IsArchipelagoSave)
             return;
 
+        SephiriaMod.ResetArchipelagoRunVictory();
+
         // Hard Mode is already enabled and controlled by Archipelago.
         // Mark Root's Retreat as purchased so the player is never
         // prompted to purchase the free vanilla Hard Mode unlock.
@@ -10207,11 +15983,6 @@ public static class NewGamePatch
         );
 
         SaveManager.Current.SetBool(
-            "TabletMixTutorial",
-            false
-        );
-
-        SaveManager.Current.SetBool(
             "StoneTableTutorial",
             false
         );
@@ -10236,6 +16007,61 @@ public static class NewGamePatch
             false
         );
 
+        SaveManager.Current.SetBool(
+            "RerollDiceTutorial",
+            false
+        );
+
+        SaveManager.Current.SetBool(
+            "TabletEngravingTutorial",
+            false
+        );
+
+        SaveManager.Current.SetBool(
+            "ShowDiceConvertTutorial",
+            false
+        );
+
+        SaveManager.Current.SetBool(
+            "ProtectionOfRationalTutorial",
+            false
+        );
+
+        SaveManager.Current.SetBool(
+            "ProtectionOfRationalBrokenTutorial",
+            false
+        );
+
+        SaveManager.Current.SetBool(
+            "AltarOfIdentifyTutorialEnd",
+            true
+        );
+
+        SaveManager.Current.SetBool(
+            "PocketDimensionShopTutorial",
+            false
+        );
+
+        SaveManager.Current.SetBool(
+            "TalentTutorial",
+            false
+        );
+
+        SaveManager.Current.SetBool(
+            "SubBagTutorial",
+            false
+        );
+
+        SaveManager.Current.SetBool(
+            "StartingFountainTutorial3",
+            false
+        );
+
+        SaveManager.Current.SetBool(
+            "ReplenishmentTutorial_InShop",
+            false
+        );
+
         if (SephiriaMod.GoalChapter >= 4)
         {
             SaveManager.Current.SetBool(
@@ -10245,15 +16071,14 @@ public static class NewGamePatch
         }
 
         SephiriaMod.ResetArchipelagoShrineRunState();
-
-        MelonLogger.Msg(
-            $"[DEBUG] Current Race ID = " +
-            $"{SaveManager.CurrentRun.GetInt("CurrentGame", -1)}"
-        );
+        SephiriaMod.ResetArchipelagoAnvilRunState();
+        SephiriaMod.ResetArchipelagoCintamaniRunState();
 
         DesertEndEventPatch.Reset();
 
-        MelonLogger.Msg($"NewGame reached - AP Goal Chapter: {SephiriaMod.GoalChapter}");
+        MelonLogger.Msg(
+            $"[AP Chapter] Starting run for Goal Chapter {SephiriaMod.GoalChapter}."
+        );
 
         switch (SephiriaMod.GoalChapter)
         {
@@ -10355,6 +16180,8 @@ public static class DesertEndEventPatch
         }
 
         intercepted = true;
+
+        SephiriaMod.MarkArchipelagoRunVictory();
 
         var weaponController = UnityEngine.Object.FindObjectOfType<WeaponControllerSimple>();
 
@@ -10557,8 +16384,10 @@ public static class Chapter5ClearPatch
         if (!__instance.isServer)
             return true;
 
+        SephiriaMod.MarkArchipelagoRunVictory();
+
         MelonLogger.Msg(
-            "[DEBUG] Chapter 5 Qliphoth defeated."
+            "[AP Chapter 5] Chapter 5 Qliphoth defeated."
         );
 
         var weaponController =
@@ -10640,6 +16469,8 @@ public static class Chapter6ClearPatch
         // Only the host should record the AP clear.
         if (!Mirror.NetworkServer.active)
             return true;
+
+        SephiriaMod.MarkArchipelagoRunVictory();
 
         var weaponController =
             UnityEngine.Object.FindObjectOfType<WeaponControllerSimple>();
@@ -10723,6 +16554,8 @@ public static class Chapter2GameOverPatch
 
         SephiriaMod.Chapter2EndingReached = false;
 
+        SephiriaMod.MarkArchipelagoRunVictory();
+
         var weaponController =
             __instance.GetComponent<WeaponControllerSimple>();
 
@@ -10782,6 +16615,8 @@ public static class Chapter3EndPatch
         if (SephiriaMod.GoalChapter != 3)
             return true;
 
+        SephiriaMod.MarkArchipelagoRunVictory();
+
         var weaponController =
             UnityEngine.Object.FindObjectOfType<WeaponControllerSimple>();
 
@@ -10836,6 +16671,8 @@ public static class Chapter4EndPatch
 
         if (__instance.clearCountBoolKey != "Chapter4ClearCount")
             return true;
+
+        SephiriaMod.MarkArchipelagoRunVictory();
 
         var weaponController =
             UnityEngine.Object.FindObjectOfType<WeaponControllerSimple>();
@@ -11273,7 +17110,7 @@ public static class ArchipelagoSephiriteGeneratePatch
                 .IsEligibleArchipelagoSephirite(
                     __instance))
         {
-            MelonLogger.Msg(
+            APDebug.Log(
                 "[AP Sephirite] " +
                 $"Type={__instance.type} - " +
                 "does not participate."
@@ -11314,7 +17151,7 @@ public static class ArchipelagoSephiriteGeneratePatch
 
         if (wasAlreadyAssigned)
         {
-            MelonLogger.Msg(
+            APDebug.Log(
                 $"[AP Sephirite] Reused persistent " +
                 $"assignment #{eligibleNumber}, " +
                 $"Seed={__instance.CurrentSeed}."
@@ -11326,7 +17163,7 @@ public static class ArchipelagoSephiriteGeneratePatch
 
         if (!isArchipelagoPosition)
         {
-            MelonLogger.Msg(
+            APDebug.Log(
                 $"[AP Sephirite] Eligible " +
                 $"#{eligibleNumber} -> VANILLA " +
                 $"({__instance.type}, " +
@@ -11379,7 +17216,7 @@ public static class ArchipelagoSephiriteGeneratePatch
 
         if (SephiriaMod.WasArchipelagoSephiriteClaimed( __instance))
         {
-            MelonLogger.Msg(
+            APDebug.Log(
                 $"[AP Sephirite] Eligible " +
                 $"#{eligibleNumber} was already resolved. " +
                 "It will be consumed without another reward."
@@ -11390,7 +17227,7 @@ public static class ArchipelagoSephiriteGeneratePatch
 
         if (locationNames.Count == 0)
         {
-            MelonLogger.Msg(
+            APDebug.Log(
                 $"[AP Sephirite] Eligible " +
                 $"#{eligibleNumber} -> AP position, " +
                 $"StageProgress={stageProgress}, " +
@@ -11402,13 +17239,13 @@ public static class ArchipelagoSephiriteGeneratePatch
             return;
         }
 
-        MelonLogger.Msg(
+        APDebug.Log(
             $"[AP Sephirite] Eligible " +
             $"#{eligibleNumber} -> AP, " +
             $"Seed={__instance.CurrentSeed}"
         );
 
-        MelonLogger.Msg(
+        APDebug.Log(
             $"[AP Sephirite] " +
             $"StageProgress={stageProgress}, " +
             $"Pool={poolName}, " +
@@ -11418,7 +17255,7 @@ public static class ArchipelagoSephiriteGeneratePatch
 
         foreach (string locationName in locationNames)
         {
-            MelonLogger.Msg(
+            APDebug.Log(
                 "[AP Sephirite Choice] " +
                 locationName
             );
@@ -12277,6 +18114,12 @@ public static class ArchipelagoSephiriteTooltipVisualPatch
             tooltip
         );
 
+        HideTooltipImageArrayAndRemember(
+            __instance,
+            tooltip,
+            "subIconImages"
+        );
+
         HideTooltipObjectAndRemember(
             __instance,
             tooltip,
@@ -12293,6 +18136,12 @@ public static class ArchipelagoSephiriteTooltipVisualPatch
             __instance,
             tooltip,
             "tierDisplay"
+        );
+
+        HideTooltipObjectAndRemember(
+            __instance,
+            tooltip,
+            "magicZone"
         );
 
         HideTooltipObjectAndRemember(
@@ -12518,6 +18367,81 @@ public static class ArchipelagoSephiriteTooltipVisualPatch
         }
 
         gameObject.SetActive(false);
+    }
+
+    private static void HideTooltipImageArrayAndRemember(
+        UI_SephiriteRewardElement rewardElement,
+        object tooltip,
+        string fieldName)
+    {
+        if (rewardElement == null ||
+            tooltip == null)
+        {
+            return;
+        }
+
+        FieldInfo field =
+            AccessTools.Field(
+                tooltip.GetType(),
+                fieldName
+            );
+
+        if (field == null)
+            return;
+
+        UnityEngine.UI.Image[] images =
+            field.GetValue(tooltip)
+                as UnityEngine.UI.Image[];
+
+        if (images == null)
+            return;
+
+        int rewardElementId =
+            rewardElement.GetInstanceID();
+
+        Dictionary<
+            string,
+            SavedTooltipObjectState> states;
+
+        if (!savedTooltipObjectStates.TryGetValue(
+                rewardElementId,
+                out states))
+        {
+            states =
+                new Dictionary<
+                    string,
+                    SavedTooltipObjectState>();
+
+            savedTooltipObjectStates[
+                rewardElementId
+            ] = states;
+        }
+
+        for (int i = 0; i < images.Length; i++)
+        {
+            UnityEngine.UI.Image image =
+                images[i];
+
+            if (image == null)
+                continue;
+
+            string stateKey =
+                fieldName + "_" + i;
+
+            if (!states.ContainsKey(stateKey))
+            {
+                states[stateKey] =
+                    new SavedTooltipObjectState
+                    {
+                        GameObject =
+                            image.gameObject,
+                        WasActive =
+                            image.gameObject.activeSelf
+                    };
+            }
+
+            image.gameObject.SetActive(false);
+        }
     }
 
     public static void RestoreTooltipState(
@@ -13088,6 +19012,40 @@ public static class ArchipelagoCostumePlayerLoadedPatch
         if (!SephiriaMod.IsArchipelagoSave)
             return;
 
+        if (CombatManager.Instance != null &&
+            CombatManager.Instance.unlockables != null)
+        {
+            for (int i =
+                    CombatManager.Instance.unlockables.Count - 1;
+                 i >= 0;
+                 i--)
+            {
+                CostumeUnlockEntity tracker =
+                    CombatManager.Instance.unlockables[i];
+
+                if (tracker == null ||
+                    tracker.unlockCostume == null)
+                {
+                    continue;
+                }
+
+                if (!SephiriaMod
+                        .IsRemovedArchipelagoCostumeMission(
+                            tracker.unlockCostume.id))
+                {
+                    continue;
+                }
+
+                tracker.ClearTarget();
+
+                CombatManager.Instance.unlockables.RemoveAt(i);
+
+                UnityEngine.Object.Destroy(
+                    tracker.gameObject
+                );
+            }
+        }
+
         SephiriaMod.QueuePermanentItemSync();
     }
 }
@@ -13426,11 +19384,22 @@ public static class ArchipelagoCostumeSkinEquipPatch
 public static class ArchipelagoPermanentRewardPurchasePatch
 {
     public static bool Prefix(
-        TreeShopItemEntity shopItem,
-        ref bool __result)
+    TreeShopItemEntity shopItem,
+    ref bool __result)
     {
         if (!SephiriaMod.IsArchipelagoSave)
             return true;
+
+        // Received Upgrades is display-only.
+        // Nothing on this version of the tree can be purchased.
+        if (ArchipelagoTreeShopModeController.IsTreeShopOpen &&
+            ArchipelagoTreeShopModeController.CurrentMode ==
+                ArchipelagoTreeShopModeController
+                    .TreeMode.ReceivedUpgrades)
+        {
+            __result = false;
+            return false;
+        }
 
         if (shopItem == null ||
             !SephiriaMod
@@ -13443,7 +19412,7 @@ public static class ArchipelagoPermanentRewardPurchasePatch
 
         __result = false;
 
-        MelonLogger.Msg(
+        APDebug.Log(
             $"[AP Permanent Reward] Blocked vanilla " +
             $"TreeShop reward {shopItem.id}."
         );
@@ -13573,139 +19542,6 @@ public static class ArchipelagoDesertStagePatch
 }
 
 [HarmonyPatch(
-    typeof(PlayerAvatar),
-    nameof(PlayerAvatar.RequestMoveStage)
-)]
-public static class RequestMoveStageDiagnosticPatch
-{
-    public static void Prefix(string stageName)
-    {
-        if (!SephiriaMod.IsArchipelagoSave)
-            return;
-
-        MelonLogger.Msg(
-            $"[MOVE STAGE REQUEST DEBUG] " +
-            $"RequestMoveStage({stageName})"
-        );
-    }
-}
-
-[HarmonyPatch(
-    typeof(PlayerAvatar),
-    nameof(PlayerAvatar.ServerLoadStage)
-)]
-public static class StageQuestRequirementDiagnosticPatch
-{
-    public static void Prefix(
-        PlayerAvatar __instance,
-        string stageName)
-    {
-        if (!SephiriaMod.IsArchipelagoSave)
-            return;
-
-        if (DungeonManager.Instance == null)
-        {
-            MelonLogger.Msg(
-                "[STAGE QUEST DEBUG] DungeonManager is null."
-            );
-            return;
-        }
-
-        RaceEntity race =
-            DungeonManager.Instance.Race;
-
-        StageEntity stage =
-            DungeonManager.Instance.FindStage(stageName);
-
-        MelonLogger.Msg(
-            "[STAGE QUEST DEBUG] " +
-            $"Destination={stageName} | " +
-            $"RaceId={DungeonManager.Instance.raceId} | " +
-            $"RaceRequirement=" +
-            $"{(race != null ? race.mainQuestProgressRequired : -1)} | " +
-            $"StageFound={stage != null} | " +
-            $"StageRequirement=" +
-            $"{(stage != null ? stage.requireQuestProgress : -1)}"
-        );
-
-        if (race != null &&
-            race.stages != null)
-        {
-            foreach (StageEntity raceStage in race.stages)
-            {
-                if (raceStage == null)
-                    continue;
-
-                MelonLogger.Msg(
-                    $"[STAGE QUEST DEBUG RACE STAGE] " +
-                    $"{raceStage.name}"
-                );
-            }
-        }
-
-        foreach (var connection in NetworkServer.connections)
-        {
-            if (connection.Value == null ||
-                connection.Value.identity == null)
-            {
-                continue;
-            }
-
-            PlayerAvatar player =
-                connection.Value.identity
-                    .GetComponent<PlayerAvatar>();
-
-            if (player == null)
-                continue;
-
-            PlayerLocalDataStorage data =
-                player.GetComponent<PlayerLocalDataStorage>();
-
-            if (data == null)
-                continue;
-
-            int progress = data.mainQuestProgress;
-
-            bool passesRace =
-                race == null ||
-                race.mainQuestProgressRequired == 0 ||
-                progress >= race.mainQuestProgressRequired;
-
-            bool passesStage =
-                stage == null ||
-                stage.requireQuestProgress == 0 ||
-                progress >= stage.requireQuestProgress;
-
-            MelonLogger.Msg(
-                "[STAGE QUEST DEBUG PLAYER] " +
-                $"Connection={connection.Key} | " +
-                $"MainQuestProgress={progress} | " +
-                $"IsInDungeon={player.isInDungeon} | " +
-                $"PassesRace={passesRace} | " +
-                $"PassesStage={passesStage}"
-            );
-        }
-    }
-}
-
-[HarmonyPatch(
-    typeof(PlayerAvatar),
-    "UserCode_RpcBroadcastFailedFromMainQuest__Int32"
-)]
-public static class MainQuestFailureDiagnosticPatch
-{
-    public static void Prefix(int type)
-    {
-        if (!SephiriaMod.IsArchipelagoSave)
-            return;
-
-        MelonLogger.Msg(
-            $"[MAIN QUEST FAILURE DEBUG] Type={type}"
-        );
-    }
-}
-
-[HarmonyPatch(
     typeof(UI_JournalPanel),
     nameof(UI_JournalPanel.Connect)
 )]
@@ -13831,29 +19667,6 @@ public static class ArchipelagoJournalConnectPatch
         GridLayoutGroup gridLayout =
             loreButton.transform.parent
                 .GetComponent<GridLayoutGroup>();
-
-        MelonLogger.Msg(
-            "[AP Journal Layout] " +
-            $"Parent={loreButton.transform.parent.name} | " +
-            $"HorizontalLayout={horizontalLayout != null} | " +
-            $"GridLayout={gridLayout != null}"
-        );
-
-        for (int i = 0; i < tab.tabButtons.Length; i++)
-        {
-            RectTransform rect =
-                tab.tabButtons[i]
-                    .GetComponent<RectTransform>();
-
-            MelonLogger.Msg(
-                $"[AP Journal Layout] Button {i} " +
-                $"Name={tab.tabButtons[i].name} | " +
-                $"Pos={rect.anchoredPosition} | " +
-                $"Size={rect.sizeDelta} | " +
-                $"AnchorMin={rect.anchorMin} | " +
-                $"AnchorMax={rect.anchorMax}"
-            );
-        }
 
         UI_TabButton apButton =
             UnityEngine.Object.Instantiate(
@@ -14203,6 +20016,75 @@ public static class ArchipelagoTreeShopGetIntPatch
             ArchipelagoTreeShopSaveRedirect
                 .RedirectKey(key);
     }
+
+
+    public static void Postfix(
+        string key,
+        ref int __result)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        if (!ArchipelagoTreeShopModeController
+                .IsTreeShopOpen)
+        {
+            return;
+        }
+
+        if (ArchipelagoTreeShopModeController
+                .CurrentMode !=
+            ArchipelagoTreeShopModeController
+                .TreeMode.ReceivedUpgrades)
+        {
+            return;
+        }
+
+        const string prefix =
+            "TreeShopItem_";
+
+        const string suffix =
+            "_PurchasedCount";
+
+        if (string.IsNullOrEmpty(key) ||
+            !key.StartsWith(
+                prefix,
+                StringComparison.Ordinal) ||
+            !key.EndsWith(
+                suffix,
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        string idText =
+            key.Substring(
+                prefix.Length,
+                key.Length -
+                prefix.Length -
+                suffix.Length
+            );
+
+        int treeShopItemId;
+
+        if (!int.TryParse(
+                idText,
+                out treeShopItemId))
+        {
+            return;
+        }
+
+        int receivedCount;
+
+        if (!SephiriaMod
+                .TryGetArchipelagoReceivedTreeShopCount(
+                    treeShopItemId,
+                    out receivedCount))
+        {
+            return;
+        }
+
+        __result = receivedCount;
+    }
 }
 
 [HarmonyPatch(
@@ -14242,7 +20124,7 @@ public static class ArchipelagoTreeShopBuyItemPatch
         if (ArchipelagoTreeShopModeController.CurrentMode !=
             ArchipelagoTreeShopModeController.TreeMode.ArchipelagoTree)
         {
-            return true;
+            return false;
         }
 
         // Root's Retreat is handled separately.
@@ -14290,112 +20172,19 @@ public static class ArchipelagoTreeShopBuyItemPatch
         if (newCount >= shopItem.maxQuantity)
         {
             MelonLogger.Msg(
-                $"[AP Tree] Node {id} fully purchased. " +
-                $"This will become its AP location check."
+                $"[AP Tree] Node {id} fully purchased."
             );
+
+            SephiriaMod
+                .TryCompleteArchipelagoDestinyInscription(
+                    id
+                );
         }
 
         // CRITICAL:
         // Do not run vanilla BuyItem().
         // That would actually grant the Sephiria upgrade.
         return false;
-    }
-}
-
-[HarmonyPatch(
-    typeof(UI_TreeShopPanel),
-    nameof(UI_TreeShopPanel.OnOpened)
-)]
-public static class ArchipelagoTreeRewardDebugPatch
-{
-    private static bool dumped = false;
-
-    public static void Postfix()
-    {
-        if (!SephiriaMod.IsArchipelagoSave)
-            return;
-
-        if (dumped)
-            return;
-
-        dumped = true;
-
-        MelonLogger.Msg(
-            "========== AP TREE REWARD DUMP =========="
-        );
-
-        foreach (TreeShopItemEntity item
-            in TreeShopItemDatabase.GetAll())
-        {
-            if (item == null)
-                continue;
-
-            // Exclude things we already know are not
-            // normal Destiny Inscription rewards.
-            if (item.id >= 2000)
-                continue;
-
-            MelonLogger.Msg(
-                $"[AP Tree Reward] " +
-                $"ID={item.id} | " +
-                $"Name={item.aName} | " +
-                $"Behaviour={item.behaviour} | " +
-                $"Max={item.maxQuantity}"
-            );
-
-            if (item.statusByLevel != null)
-            {
-                for (int i = 0;
-                    i < item.statusByLevel.Length;
-                    i++)
-                {
-                    MelonLogger.Msg(
-                        $"    Status[{i}] = " +
-                        $"{item.statusByLevel[i]}"
-                    );
-                }
-            }
-
-            if (item.items != null)
-            {
-                for (int i = 0;
-                    i < item.items.Length;
-                    i++)
-                {
-                    ItemEntity reward =
-                        item.items[i];
-
-                    if (reward == null)
-                        continue;
-
-                    MelonLogger.Msg(
-                        $"    Item[{i}] = " +
-                        $"{reward.name}"
-                    );
-                }
-            }
-
-            if (item.questEntity != null)
-            {
-                MelonLogger.Msg(
-                    $"    Quest = " +
-                    $"{item.questEntity.name}"
-                );
-            }
-
-            if (!string.IsNullOrEmpty(
-                item.destinyChangeID))
-            {
-                MelonLogger.Msg(
-                    $"    DestinyChange = " +
-                    $"{item.destinyChangeID}"
-                );
-            }
-        }
-
-        MelonLogger.Msg(
-            "======== END AP TREE REWARD DUMP ========"
-        );
     }
 }
 
@@ -14731,7 +20520,7 @@ public static class ArchipelagoRyliePotionDropPatch
 
         __result = SkipPotionDrop();
 
-        MelonLogger.Msg(
+        APDebug.Log(
             "[AP Mission] Suppressed Rylie's vanilla potion drop."
         );
 
@@ -15073,7 +20862,7 @@ public static class ArchipelagoFruitSkewerCompletionPatch
                 }
             }
 
-            MelonLogger.Msg(
+            APDebug.Log(
                 "[AP Mission] Removed temporary Fruit Skewer."
             );
         }
@@ -15230,9 +21019,26 @@ public static class ArchipelagoWeaponUnlockedPatch
             );
         }
 
-        SephiriaMod.QueueArchipelagoWeaponStandSync();
-
         return false;
+    }
+}
+
+[HarmonyPatch(
+    typeof(Interactable),
+    "Awake"
+)]
+public static class ArchipelagoWeaponStandAwakePatch
+{
+    public static void Postfix(
+        Interactable __instance)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        if (!(__instance is TownWeaponStand))
+            return;
+
+        SephiriaMod.QueueArchipelagoWeaponStandSync();
     }
 }
 
@@ -15280,6 +21086,1182 @@ public static class ArchipelagoWeaponStandInteractionPatch
 
             default:
                 return true;
+        }
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_TreeShopItem),
+    nameof(UI_TreeShopItem.SetVisible)
+)]
+public static class ArchipelagoTreeShopItemVisualPatch
+{
+    public static void Postfix(
+        UI_TreeShopItem __instance,
+        int value)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        if (!ArchipelagoTreeShopModeController
+            .IsTreeShopOpen)
+        {
+            return;
+        }
+
+        if (ArchipelagoTreeShopModeController
+            .CurrentMode !=
+            ArchipelagoTreeShopModeController
+                .TreeMode.ArchipelagoTree)
+        {
+            return;
+        }
+
+        if (__instance == null ||
+            __instance.connected == null ||
+            __instance.iconImage == null)
+        {
+            return;
+        }
+
+        // Root's Retreat belongs to the separate
+        // Hard Mode system, not the AP tree.
+        if (__instance.connected.id == 3000)
+            return;
+
+        // If Sephiria has hidden the entire node,
+        // leave it hidden.
+        if (value == 0)
+            return;
+
+        int purchasedCount =
+            SaveManager.Current.GetInt(
+                $"TreeShopItem_{__instance.connected.id}_PurchasedCount",
+                0
+            );
+
+        bool fullyClaimed =
+            purchasedCount >=
+            __instance.connected.maxQuantity;
+
+        if (!fullyClaimed)
+        {
+            // The AP Tree does not reveal the
+            // vanilla reward represented by this node.
+            __instance.iconImage
+                .gameObject.SetActive(false);
+
+            return;
+        }
+
+        // Fully claimed AP location:
+        // replace the vanilla reward icon with
+        // the Archipelago logo.
+        UnityEngine.Sprite apSprite =
+            SephiriaMod
+                .GetArchipelagoSaveProfileSprite(
+                    __instance.connected.icon
+                );
+
+        if (apSprite == null)
+        {
+            __instance.iconImage
+                .gameObject.SetActive(false);
+
+            return;
+        }
+
+        // Remember the normal size of this node's
+        // vanilla reward icon before replacing it.
+        Vector2 normalIconSize =
+            __instance.iconImage
+                .rectTransform.sizeDelta;
+
+        __instance.iconImage
+            .gameObject.SetActive(true);
+
+        __instance.iconImage.sprite =
+            apSprite;
+
+        __instance.iconImage.preserveAspect =
+            true;
+
+        __instance.iconImage.material =
+            null;
+
+        // The AP logo is visually much larger than
+        // Sephiria's normal reward icons, so display
+        // it at 65% of the normal icon area.
+        __instance.iconImage
+            .rectTransform.sizeDelta =
+                normalIconSize * 0.65f;
+    }
+}
+
+public sealed class ArchipelagoTreeShopMissionLockState
+{
+    public TreeShopItemEntity Item;
+    public string RelatedDestinySwitch;
+}
+
+
+public static class ArchipelagoTreeShopMissionLockBypass
+{
+    public static ArchipelagoTreeShopMissionLockState Begin(
+        UI_TreeShopItem item)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return null;
+
+        if (!ArchipelagoTreeShopModeController
+                .IsTreeShopOpen)
+        {
+            return null;
+        }
+
+        if (ArchipelagoTreeShopModeController
+                .CurrentMode !=
+            ArchipelagoTreeShopModeController
+                .TreeMode.ArchipelagoTree)
+        {
+            return null;
+        }
+
+        if (item == null ||
+            item.connected == null)
+        {
+            return null;
+        }
+
+        int id = item.connected.id;
+
+        // These are the two vanilla mission-gated
+        // nodes in the Destiny Inscription tree:
+        //
+        // 300 = Talent Point I
+        //       requires Home Repairs
+        //
+        // 18  = Hide and Seek
+        //       requires Ark Exploration
+        if (id != 300 &&
+            id != 18)
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(
+                item.connected.relatedDestinySwitch))
+        {
+            return null;
+        }
+
+        ArchipelagoTreeShopMissionLockState state =
+            new ArchipelagoTreeShopMissionLockState
+            {
+                Item = item.connected,
+                RelatedDestinySwitch =
+                    item.connected.relatedDestinySwitch
+            };
+
+        // Temporarily remove the vanilla mission gate.
+        item.connected.relatedDestinySwitch = "";
+
+        return state;
+    }
+
+
+    public static void End(
+        ArchipelagoTreeShopMissionLockState state)
+    {
+        if (state == null ||
+            state.Item == null)
+        {
+            return;
+        }
+
+        // Put the vanilla data straight back.
+        state.Item.relatedDestinySwitch =
+            state.RelatedDestinySwitch;
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_TreeShopPanel),
+    "Update"
+)]
+public static class ArchipelagoTreeShopMissionLockUpdatePatch
+{
+    public static void Prefix(
+        UI_TreeShopItem ___currentSelected,
+        out ArchipelagoTreeShopMissionLockState __state)
+    {
+        __state =
+            ArchipelagoTreeShopMissionLockBypass.Begin(
+                ___currentSelected
+            );
+    }
+
+
+    public static void Postfix(
+        ArchipelagoTreeShopMissionLockState __state)
+    {
+        ArchipelagoTreeShopMissionLockBypass.End(
+            __state
+        );
+    }
+}
+
+
+[HarmonyPatch(
+    typeof(UI_TreeShopPanel),
+    "HandleItemSelected"
+)]
+public static class ArchipelagoTreeShopMissionLockTooltipPatch
+{
+    public static void Prefix(
+        UI_TreeShopItem item,
+        out ArchipelagoTreeShopMissionLockState __state)
+    {
+        __state =
+            ArchipelagoTreeShopMissionLockBypass.Begin(
+                item
+            );
+    }
+
+
+    public static void Postfix(
+        ArchipelagoTreeShopMissionLockState __state)
+    {
+        ArchipelagoTreeShopMissionLockBypass.End(
+            __state
+        );
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_TreeShopPanel),
+    "HandleItemSelected"
+)]
+public static class ArchipelagoTreeShopTooltipPatch
+{
+    public static void Postfix(
+        UI_TreeShopPanel __instance,
+        UI_TreeShopItem item)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        if (!ArchipelagoTreeShopModeController
+                .IsTreeShopOpen)
+        {
+            return;
+        }
+
+        // -------------------------------------------------
+        // RECEIVED UPGRADES
+        // -------------------------------------------------
+        if (ArchipelagoTreeShopModeController
+                .CurrentMode ==
+            ArchipelagoTreeShopModeController
+                .TreeMode.ReceivedUpgrades)
+        {
+            if (item == null ||
+                item.connected == null)
+            {
+                return;
+            }
+
+            // Root's Retreat belongs to Hard Mode.
+            if (item.connected.id == 3000)
+            {
+                return;
+            }
+
+            int receivedCount;
+
+            SephiriaMod
+                .TryGetArchipelagoReceivedTreeShopCount(
+                    item.connected.id,
+                    out receivedCount
+                );
+
+            bool hasReceivedUpgrade =
+                receivedCount > 0;
+
+            // Vanilla may mark this node as locked because
+            // its normal tree prerequisites have not been met.
+            //
+            // On Received Upgrades, prerequisite progression
+            // does not matter. The only thing that matters is
+            // whether Archipelago actually sent this upgrade.
+            if (__instance.tooltipDisabledPanel != null)
+            {
+                __instance.tooltipDisabledPanel
+                    .gameObject.SetActive(
+                        !hasReceivedUpgrade
+                    );
+            }
+
+            if (__instance.tooltipDisabledText_Locked != null)
+            {
+                __instance.tooltipDisabledText_Locked
+                    .gameObject.SetActive(
+                        !hasReceivedUpgrade
+                    );
+            }
+
+            if (__instance.tooltipDisabledText_WIP != null)
+            {
+                __instance.tooltipDisabledText_WIP
+                    .gameObject.SetActive(false);
+            }
+
+            if (__instance
+                    .tooltipDisabledText_Locked_DestinySwitch != null)
+            {
+                __instance
+                    .tooltipDisabledText_Locked_DestinySwitch
+                    .gameObject.SetActive(false);
+            }
+
+            // AP Tree can hide this icon. Received Upgrades
+            // always uses Sephiria's normal vanilla icon.
+            if (__instance.tooltipIconImage != null)
+            {
+                __instance.tooltipIconImage
+                    .gameObject.SetActive(true);
+            }
+
+            return;
+        }
+
+        if (item == null ||
+            item.connected == null)
+        {
+            return;
+        }
+
+        // Root's Retreat belongs to Hard Mode.
+        // It is not an AP Tree location, so make
+        // sure its normal icon remains visible.
+        if (item.connected.id == 3000)
+        {
+            if (__instance.tooltipIconImage != null)
+            {
+                __instance.tooltipIconImage
+                    .gameObject.SetActive(true);
+            }
+
+            return;
+        }
+
+        string itemName;
+        string itemDescription;
+
+        if (!SephiriaMod
+                .TryGetArchipelagoDestinyInscriptionScoutedDisplay(
+                    item.connected.id,
+                    out itemName,
+                    out itemDescription))
+        {
+            return;
+        }
+
+        // The randomized AP item replaces the
+        // vanilla Destiny Inscription reward title.
+        if (__instance.tooltipNameText != null)
+        {
+            __instance.tooltipNameText.text =
+                itemName;
+        }
+
+        // Use the same description presentation
+        // as randomized Sephirite rewards.
+        if (__instance.tooltipDescriptionText != null)
+        {
+            __instance.tooltipDescriptionText.text =
+                itemDescription;
+        }
+
+        // Do not show a vanilla stat/reward effect
+        // for an AP check.
+        if (__instance.addedEffectText != null)
+        {
+            __instance.addedEffectText
+                .gameObject
+                .SetActive(false);
+        }
+
+        // -----------------------------------------
+        // CLAIM STATE
+        // -----------------------------------------
+
+        int purchasedCount =
+            SaveManager.Current.GetInt(
+                $"TreeShopItem_{item.connected.id}_PurchasedCount",
+                0
+            );
+
+        bool fullyClaimed =
+            purchasedCount >=
+            item.connected.maxQuantity;
+
+        if (__instance.tooltipIconImage == null)
+            return;
+
+        // Vanilla HandleItemSelected() has just restored
+        // this icon's normal size, so remember that size
+        // before replacing the sprite.
+        Vector2 normalIconSize =
+            __instance.tooltipIconImage
+                .rectTransform.sizeDelta;
+
+        if (!fullyClaimed)
+        {
+            // A null sprite by itself renders as a white
+            // rectangle, so hide the Image object entirely.
+            __instance.tooltipIconImage
+                .gameObject.SetActive(false);
+
+            return;
+        }
+
+        UnityEngine.Sprite apLogo =
+            SephiriaMod.GetArchipelagoSephiriteSprite(
+                item.connected.icon
+            );
+
+        if (apLogo == null)
+            return;
+
+        __instance.tooltipIconImage
+            .gameObject.SetActive(true);
+
+        __instance.tooltipIconImage.sprite =
+            apLogo;
+
+        __instance.tooltipIconImage.preserveAspect =
+            true;
+
+        __instance.tooltipIconImage.material =
+            __instance.tooltipIconImage.defaultMaterial;
+
+        // Same smaller presentation we used for
+        // the AP logo inside the tree nodes.
+        __instance.tooltipIconImage
+            .rectTransform.sizeDelta =
+                normalIconSize * 0.65f;
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_TreeShopPurchasePanel),
+    nameof(UI_TreeShopPurchasePanel.Open),
+    new Type[] { typeof(TreeShopItemEntity) }
+)]
+public static class ArchipelagoTreeShopPurchasePopupPatch
+{
+    public static bool Prefix(
+        TreeShopItemEntity item)
+    {
+        // Normal saves keep Sephiria's vanilla popup.
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        // Never show Destiny Inscription unlock
+        // popups on an Archipelago save.
+        return false;
+    }
+}
+
+// popup suppression here??
+
+[HarmonyPatch]
+public static class ArchipelagoTreeShopPreviewPatch
+{
+    public static IEnumerable<MethodBase> TargetMethods()
+    {
+        return typeof(UI_UnlockItemPreviewer)
+            .GetMethods(
+                BindingFlags.Instance |
+                BindingFlags.Public |
+                BindingFlags.NonPublic |
+                BindingFlags.DeclaredOnly
+            )
+            .Where(method => method.Name == "Open");
+    }
+
+    public static bool Prefix()
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        if (!ArchipelagoTreeShopModeController
+                .IsTreeShopOpen)
+        {
+            return true;
+        }
+
+        // Block preview ONLY on the randomized AP Tree.
+        if (ArchipelagoTreeShopModeController
+                .CurrentMode ==
+            ArchipelagoTreeShopModeController
+                .TreeMode.ArchipelagoTree)
+        {
+            return false;
+        }
+
+        // Received Upgrades keeps vanilla preview.
+        return true;
+    }
+}
+
+[HarmonyPatch]
+public static class ArchipelagoAnvilFloorGenerationPatch
+{
+    public sealed class AnvilGenerationState
+    {
+        public object Instance;
+
+        public FieldInfo MainEventTypesField;
+        public FieldInfo SubEventTypesField;
+
+        public EFloorMainEventType[] MainEventTypes;
+        public EFloorMainEventType[] SubEventTypes;
+    }
+
+    public static IEnumerable<MethodBase> TargetMethods()
+    {
+        return typeof(StageEntity)
+            .Assembly
+            .GetTypes()
+            .Where(type =>
+                typeof(StageEntity).IsAssignableFrom(type) &&
+                type != typeof(StageEntity))
+            .Select(type =>
+                type.GetMethod(
+                    "GenerateStage",
+                    BindingFlags.Instance |
+                    BindingFlags.Public |
+                    BindingFlags.DeclaredOnly
+                ))
+            .Where(method => method != null)
+            .Cast<MethodBase>();
+    }
+
+    public static void Prefix(
+        object __instance,
+        DungeonManager dungeon,
+        ref bool createAnvil,
+        out AnvilGenerationState __state)
+    {
+        __state = null;
+
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        int unlockedAnvils = SephiriaMod.GetProgressiveAnvilUpgradeCount();
+        int usedAnvils = SephiriaMod.GetArchipelagoAnvilUsesThisRun();
+
+        int remainingAnvils =
+            Math.Max(
+                unlockedAnvils - usedAnvils,
+                0
+            );
+
+        // For StageEntity implementations that actually use
+        // the vanilla createAnvil argument.
+        createAnvil = remainingAnvils > 0;
+
+
+        Type stageType = __instance.GetType();
+
+        FieldInfo mainEventTypesField =
+            GetFieldQuietly(
+                stageType,
+                "mainEventTypes"
+            );
+
+        FieldInfo subEventTypesField =
+            GetFieldQuietly(
+                stageType,
+                "subEventTypes"
+            );
+
+        EFloorMainEventType[] originalMainEventTypes = null;
+        EFloorMainEventType[] originalSubEventTypes = null;
+
+        EFloorMainEventType[] newMainEventTypes = null;
+        EFloorMainEventType[] newSubEventTypes = null;
+
+
+        if (mainEventTypesField != null &&
+            mainEventTypesField.FieldType ==
+                typeof(EFloorMainEventType[]))
+        {
+            originalMainEventTypes =
+                mainEventTypesField.GetValue(__instance)
+                    as EFloorMainEventType[];
+
+            if (originalMainEventTypes != null)
+            {
+                newMainEventTypes =
+                    (EFloorMainEventType[])
+                        originalMainEventTypes.Clone();
+            }
+        }
+
+
+        if (subEventTypesField != null &&
+            subEventTypesField.FieldType ==
+                typeof(EFloorMainEventType[]))
+        {
+            originalSubEventTypes =
+                subEventTypesField.GetValue(__instance)
+                    as EFloorMainEventType[];
+
+            if (originalSubEventTypes != null)
+            {
+                newSubEventTypes =
+                    (EFloorMainEventType[])
+                        originalSubEventTypes.Clone();
+            }
+        }
+
+
+        if (newMainEventTypes == null &&
+            newSubEventTypes == null)
+        {
+            return;
+        }
+
+
+        __state = new AnvilGenerationState
+        {
+            Instance = __instance,
+
+            MainEventTypesField =
+                mainEventTypesField,
+
+            SubEventTypesField =
+                subEventTypesField,
+
+            MainEventTypes =
+                originalMainEventTypes,
+
+            SubEventTypes =
+                originalSubEventTypes
+        };
+
+
+        LimitAnvils(
+            newMainEventTypes,
+            ref remainingAnvils
+        );
+
+        LimitAnvils(
+            newSubEventTypes,
+            ref remainingAnvils
+        );
+
+
+        if (newMainEventTypes != null)
+        {
+            mainEventTypesField.SetValue(
+                __instance,
+                newMainEventTypes
+            );
+        }
+
+        if (newSubEventTypes != null)
+        {
+            subEventTypesField.SetValue(
+                __instance,
+                newSubEventTypes
+            );
+        }
+    }
+
+    private static void LimitAnvils(
+        EFloorMainEventType[] eventTypes,
+        ref int remainingAnvils)
+    {
+        if (eventTypes == null)
+            return;
+
+        for (int i = 0;
+            i < eventTypes.Length;
+            i++)
+        {
+            if (eventTypes[i] !=
+                EFloorMainEventType.Anvil)
+            {
+                continue;
+            }
+
+            if (remainingAnvils > 0)
+            {
+                remainingAnvils--;
+                continue;
+            }
+
+            eventTypes[i] =
+                EFloorMainEventType.Charm;
+        }
+    }
+
+    private static FieldInfo GetFieldQuietly(
+    Type type,
+    string fieldName)
+    {
+        while (type != null)
+        {
+            FieldInfo field =
+                type.GetField(
+                    fieldName,
+                    BindingFlags.Instance |
+                    BindingFlags.Public |
+                    BindingFlags.NonPublic |
+                    BindingFlags.DeclaredOnly
+                );
+
+            if (field != null)
+                return field;
+
+            type = type.BaseType;
+        }
+
+        return null;
+    }
+
+    public static void Postfix(
+        AnvilGenerationState __state)
+    {
+        if (__state == null ||
+            __state.Instance == null)
+        {
+            return;
+        }
+
+
+        if (__state.MainEventTypesField != null &&
+            __state.MainEventTypes != null)
+        {
+            __state.MainEventTypesField.SetValue(
+                __state.Instance,
+                __state.MainEventTypes
+            );
+        }
+
+
+        if (__state.SubEventTypesField != null &&
+            __state.SubEventTypes != null)
+        {
+            __state.SubEventTypesField.SetValue(
+                __state.Instance,
+                __state.SubEventTypes
+            );
+        }
+    }
+}
+
+[HarmonyPatch(
+    typeof(Anvil),
+    "Ckeck"
+)]
+public static class ArchipelagoRunAnvilInteractablePatch
+{
+    public static void Postfix(
+        ref bool __result)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        if (!__result)
+            return;
+
+        __result =
+            SephiriaMod.CanUseArchipelagoRunAnvil();
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_WeaponEnhancementPanel),
+    nameof(UI_WeaponEnhancementPanel.Open),
+    new Type[]
+    {
+        typeof(Anvil),
+        typeof(IAnvilSound)
+    }
+)]
+public static class ArchipelagoRunAnvilPanelPatch
+{
+    public static bool Prefix(
+        Anvil anvil)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return true;
+
+        // Training Grounds passes null.
+        // Never restrict the Training Grounds Anvil.
+        if (anvil == null)
+            return true;
+
+        return SephiriaMod
+            .CanUseArchipelagoRunAnvil();
+    }
+}
+
+[HarmonyPatch(
+    typeof(Anvil),
+    nameof(Anvil.EnhanceClient)
+)]
+public static class ArchipelagoRunAnvilUsePatch
+{
+    public static void Prefix(
+        bool ___optimisticEnhanced,
+        out bool __state)
+    {
+        __state =
+            SephiriaMod.IsArchipelagoSave &&
+            !___optimisticEnhanced;
+    }
+
+
+    public static void Postfix(
+        bool __state)
+    {
+        if (!__state)
+            return;
+
+        SephiriaMod.RecordArchipelagoRunAnvilUse();
+    }
+}
+
+[HarmonyPatch(
+    typeof(PlayerSpawner),
+    nameof(PlayerSpawner.CmdSetSapphireInRun)
+)]
+public static class ArchipelagoSapphireMultiplierPatch
+{
+    public static void Prefix(
+        PlayerSpawner __instance,
+        ref int amount)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        if (__instance == null)
+            return;
+
+        int multiplier =
+            SephiriaMod.SapphireMultiplier;
+
+        if (multiplier <= 1)
+            return;
+
+        int currentAmount =
+            __instance.sapphireInRun;
+
+        // CmdSetSapphireInRun receives the NEW TOTAL,
+        // not the amount gained.
+        //
+        // Only multiply positive gains. Decreases/resets
+        // should retain vanilla behavior.
+        if (amount <= currentAmount)
+            return;
+
+        int gainedAmount =
+            amount - currentAmount;
+
+        amount =
+            currentAmount +
+            (gainedAmount * multiplier);
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_GameOverLabel),
+    nameof(UI_GameOverLabel.CalculateRunEarnedSapphire)
+)]
+public static class ArchipelagoGameOverSapphireMultiplierPatch
+{
+    public static void Postfix(
+        LevelController levelController,
+        PlayerSpawner playerSpawner,
+        PlayerAvatar playerAvatar,
+        ref int __result)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        int multiplier =
+            SephiriaMod.SapphireMultiplier;
+
+        if (multiplier <= 1)
+            return;
+
+        if (levelController == null ||
+            playerSpawner == null)
+        {
+            return;
+        }
+
+        // sapphireInRun has already been multiplied
+        // when it was collected.
+        //
+        // The only unmultiplied natural Sapphire
+        // remaining here is the level-based reward.
+        int levelSapphire =
+            Math.Max(
+                0,
+                levelController.currentLevel - 1
+            );
+
+        int multipliedBase =
+            playerSpawner.sapphireInRun +
+            (levelSapphire * multiplier);
+
+        // Reapply Sephiria's normal Sapphire Bonus
+        // percentage to the correctly multiplied base.
+        if (playerAvatar != null)
+        {
+            int sapphireBonus =
+                playerAvatar.GetCustomStatUnsafe(
+                    "SAPPHIREBONUS"
+                );
+
+            if (sapphireBonus > 0)
+            {
+                multipliedBase +=
+                    Mathf.CeilToInt(
+                        (float)(
+                            multipliedBase *
+                            sapphireBonus
+                        ) /
+                        100f
+                    );
+            }
+        }
+
+        __result = multipliedBase;
+    }
+}
+
+[HarmonyPatch(
+    typeof(PlayerSpawner),
+    "HandleDieClientside"
+)]
+public static class ArchipelagoDeathLinkPlayerDeathPatch
+{
+    public static void Postfix(
+        PlayerSpawner __instance)
+    {
+        SephiriaMod
+            .HandleLocalPlayerDeathForDeathLink(
+                __instance
+            );
+    }
+}
+
+[HarmonyPatch(
+    typeof(PlayerAvatar),
+    nameof(PlayerAvatar.AttackButtonDown)
+)]
+public static class ArchipelagoNormalAttackTrapPatch
+{
+    public static bool Prefix(
+        PlayerAvatar __instance)
+    {
+        if (!SephiriaMod
+                .IsCantNormalAttackTrapActive)
+        {
+            return true;
+        }
+
+        if (CombatManager.Instance == null ||
+            CombatManager.Instance.CurrentPlayer !=
+                __instance)
+        {
+            return true;
+        }
+
+        return false;
+    }
+}
+
+[HarmonyPatch(
+    typeof(PlayerLocalDataStorage),
+    nameof(PlayerLocalDataStorage.Move)
+)]
+public static class ArchipelagoFlippedControlsTrapPatch
+{
+    public static void Prefix(
+        PlayerLocalDataStorage __instance,
+        ref Vector2 dir)
+    {
+        if (!SephiriaMod.IsFlippedControlsTrapActive)
+            return;
+
+        if (__instance == null ||
+            __instance.Avatar == null)
+        {
+            return;
+        }
+
+        if (CombatManager.Instance == null ||
+            CombatManager.Instance.CurrentPlayer !=
+                __instance.Avatar)
+        {
+            return;
+        }
+
+        dir = -dir;
+    }
+}
+
+[HarmonyPatch(
+    typeof(CharacterDash),
+    nameof(CharacterDash.StartDash)
+)]
+public static class ArchipelagoCantDashTrapPatch
+{
+    public static bool Prefix(
+        CharacterDash __instance)
+    {
+        if (!SephiriaMod.IsCantDashTrapActive)
+            return true;
+
+        if (__instance == null ||
+            __instance.UnitAvatar == null)
+        {
+            return true;
+        }
+
+        PlayerAvatar player =
+            __instance.UnitAvatar as PlayerAvatar;
+
+        if (player == null)
+            return true;
+
+        if (CombatManager.Instance == null ||
+            CombatManager.Instance.CurrentPlayer != player)
+        {
+            return true;
+        }
+
+        // Trap is active on the local player.
+        // Completely prevent StartDash().
+        return false;
+    }
+}
+
+[HarmonyPatch(
+    typeof(IntegratedActionController),
+    nameof(IntegratedActionController.Cast)
+)]
+public static class ArchipelagoCantCastTrapPatch
+{
+    public static bool Prefix(
+        IntegratedActionController __instance,
+        int idx)
+    {
+        if (!SephiriaMod.IsCantCastTrapActive)
+            return true;
+
+        if (__instance == null)
+            return true;
+
+        PlayerAvatar player =
+            __instance.GetComponent<PlayerAvatar>();
+
+        if (player == null)
+            return true;
+
+        if (CombatManager.Instance == null ||
+            CombatManager.Instance.CurrentPlayer != player)
+        {
+            return true;
+        }
+
+        QuickSlotData slot = null;
+
+        // Normal quick slots: 0 - 7
+        if (
+            idx >= 0 &&
+            idx < __instance.quickSlots.Length
+        )
+        {
+            slot = __instance.quickSlots[idx];
+        }
+
+        // Weapon-bound quick slots: 100 - 102
+        else if (
+            idx >= 100 &&
+            idx <= 102
+        )
+        {
+            slot =
+                __instance.quickSlotsWeapon[
+                    idx - 100
+                ];
+        }
+
+        if (slot == null)
+            return true;
+
+        // Only block actual magic.
+        if (slot.Type == QuickSlotType.Magic)
+            return false;
+
+        return true;
+    }
+}
+
+[HarmonyPatch(
+    typeof(UI_SignMessage),
+    nameof(UI_SignMessage.Open)
+)]
+public static class ArchipelagoGoalSignPatch
+{
+    public static void Prefix(
+        ref string message)
+    {
+        if (!SephiriaMod.IsArchipelagoSave)
+            return;
+
+        if (!string.Equals(
+                message,
+                "My Home",
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        int clears =
+            SephiriaMod.RequiredChapterClears;
+
+        string runText =
+            clears == 1
+                ? "run"
+                : "runs";
+
+        if (SephiriaMod.UniqueWeaponsRequired)
+        {
+            message =
+                "Win " +
+                clears +
+                " " +
+                runText +
+                " with unique weapons";
+        }
+        else
+        {
+            message =
+                "Win " +
+                clears +
+                " " +
+                runText;
         }
     }
 }

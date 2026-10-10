@@ -5,7 +5,7 @@ from Options import Choice, Range, Toggle, PerGameCommonOptions
 
 class GoalChapter(Choice):
     """
-    The chapter that must be completed to finish the Archipelago goal
+    The chapter that must be completed to finish the Archipelago goal.
     """
 
     display_name = "Goal Chapter"
@@ -39,9 +39,132 @@ class UniqueWeaponsRequired(Toggle):
 
     display_name = "Require Unique Weapons"
 
+    default = 0
+
+
+class SephiritesPerFloor(Range):
+    """
+    Sets the number of randomized Sephirite checks generated
+    on each floor.
+
+    Qliphoth's Temple receives half of the selected amount.
+    (Applies only for Chapter 6.)
+
+    The allowed range is 8 to 30.
+
+    The minimum required value depends on the selected
+    Goal Chapter and other item-pool options.
+
+    Generation will fail with an explanatory error if the
+    selected value does not provide enough locations for
+    all generated items.
+
+    Recommended values that work with all current
+    item-pool settings:
+    Chapter 1: 29
+    Chapter 2: 20
+    Chapters 3-6: 16
+    """
+
+    display_name = "Sephirites Per Floor"
+
+    range_start = 8
+    range_end = 30
+    default = 16
+
+
+class RandomizeAnvilUnlocks(Toggle):
+    """
+    If enabled, the two Progressive Anvil Unlocks are added to the
+    Archipelago item pool.
+
+    If disabled, both Anvil upgrades are available from the beginning.
+    """
+
+    display_name = "Randomize Anvil Unlocks"
+
+    default = 1
+
+
+class StartingCintamaniStones(Range):
+    """
+    Adds Starting Cintamani Stone unlocks to the
+    Archipelago item pool.
+
+    Each received unlock grants one Cintamani Stone
+    charge at the beginning of every future run.
+
+    If two charges are unlocked, the second Stone is
+    granted after the first is consumed.
+
+    A Cintamani Stone breaks on fatal damage, restores
+    50% HP, and grants brief invincibility.
+
+    Maximum: 2
+    """
+
+    display_name = "Starting Cintamani Stones"
+
+    range_start = 0
+    range_end = 2
+    default = 0
+
+
+class Traps(Toggle):
+    """
+    Adds trap items to the Archipelago item pool.
+
+    Four copies of each of the five Sephiria traps are added,
+    for a total of 20 trap items.
+
+    Timed traps last between 20 and 30 seconds.
+    Bag Shuffle Trap activates instantly.
+    """
+
+    display_name = "Traps"
+
+    default = 0
+
+
+class SapphireMultiplier(Range):
+    """
+    Multiplies Sapphire earned through normal Sephiria gameplay.
+
+    This does not multiply Sapphire received from Archipelago filler items.
+    """
+
+    display_name = "Sapphire Multiplier"
+
+    range_start = 1
+    range_end = 10
+    default = 1
+
+
+class DeathLink(Toggle):
+    """
+    Enables DeathLink during active Sephiria runs.
+
+    DeathLinks received while in the overworld are discarded.
+
+    DeathLinks received during an active run are applied to the player.
+    If a DeathLink is received during a cutscene or another unsafe moment,
+    it will be delayed until the player can safely receive it.
+    """
+
+    display_name = "Death Link"
+
+    default = 0
+
 
 @dataclass
 class SephiriaOptions(PerGameCommonOptions):
     goal_chapter: GoalChapter
     required_chapter_clears: RequiredChapterClears
     unique_weapons_required: UniqueWeaponsRequired
+
+    sephirites_per_floor: SephiritesPerFloor
+    randomize_anvil_unlocks: RandomizeAnvilUnlocks
+    starting_cintamani_stones: StartingCintamaniStones
+    traps: Traps
+    sapphire_multiplier: SapphireMultiplier
+    death_link: DeathLink
