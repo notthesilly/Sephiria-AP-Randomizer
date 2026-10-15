@@ -25,6 +25,16 @@ chapter_floor_counts = {
 }
 
 
+chapter_progressive_floor_unlock_counts = {
+    1: 3,
+    2: 3,
+    3: 4,
+    4: 4,
+    5: 4,
+    6: 5,
+}
+
+
 floor_names = {
     1: "Mole Stronghold",
     2: "Woodlands",
@@ -226,6 +236,27 @@ boss_defeat_location_table = {
     "Boss Defeat - Kovess": 4008,
     "Boss Defeat - Kraz": 4009,
     "Boss Defeat - Haz": 4010,
+}
+
+
+boss_defeat_chapter_table = {
+    # Chapter 1
+    "Boss Defeat - Mogdi": 1,
+    "Boss Defeat - Rataka": 1,
+    "Boss Defeat - Erma": 1,
+    "Boss Defeat - Askard": 1,
+
+    # Chapter 2
+    "Boss Defeat - Odner": 2,
+    "Boss Defeat - Lerid": 2,
+    "Boss Defeat - Pentaxis": 2,
+
+    # Chapter 3
+    "Boss Defeat - Kovess": 3,
+
+    # Chapter 4
+    "Boss Defeat - Kraz": 4,
+    "Boss Defeat - Haz": 4,
 }
 
 

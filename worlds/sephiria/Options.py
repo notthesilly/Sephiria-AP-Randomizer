@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from Options import Choice, Range, Toggle, PerGameCommonOptions
+from Options import Choice, Range, Toggle, OptionList, PerGameCommonOptions
 
 
 class GoalChapter(Choice):
@@ -55,14 +55,17 @@ class SephiritesPerFloor(Range):
     The minimum required value depends on the selected
     Goal Chapter and other item-pool options.
 
+    Changing the list of hard mode options enabled will
+    also affect the allowed range of values
+
     Generation will fail with an explanatory error if the
     selected value does not provide enough locations for
     all generated items.
 
     Recommended values that work with all current
     item-pool settings:
-    Chapter 1: 29
-    Chapter 2: 20
+    Chapter 1: 30
+    Chapter 2: 21
     Chapters 3-6: 16
     """
 
@@ -156,6 +159,65 @@ class DeathLink(Toggle):
     default = 0
 
 
+class EnabledHardModeSettings(OptionList):
+    """
+    Determines which Hard Mode modifiers are enabled
+    in the Archipelago seed.
+
+    All modifiers are enabled by default.
+
+    Remove a modifier from the YAML list to disable it.
+
+    Enabled modifiers start at maximum difficulty
+    and can be reduced through Archipelago items.
+
+    Disabled modifiers start at level 0 and their
+    reduction items are excluded from the item pool.
+    """
+
+    display_name = "Enabled Hard Mode Settings"
+
+    valid_keys = {
+        "Ferocious Claws",
+        "Tenacious Body",
+        "Protective Armor",
+        "Agile Claws",
+        "Evil Energy",
+        "Combat Stance",
+        "Festival of Blood",
+        "False Vanguard",
+        "Dispossession",
+        "Dizziness",
+        "Deterioration",
+        "Tension",
+        "Heavy Heart",
+        "Decline",
+        "Severed Exchange",
+        "Rebellion of Machines",
+        "Proliferation",
+    }
+
+    default = [
+        "Ferocious Claws",
+        "Tenacious Body",
+        "Protective Armor",
+        "Agile Claws",
+        "Evil Energy",
+        "Combat Stance",
+        "Festival of Blood",
+        "False Vanguard",
+        "Dispossession",
+        "Dizziness",
+        "Deterioration",
+        "Tension",
+        "Heavy Heart",
+        "Decline",
+        "Severed Exchange",
+        "Rebellion of Machines",
+        "Proliferation",
+    ]
+
+
 @dataclass
 class SephiriaOptions(PerGameCommonOptions):
     goal_chapter: GoalChapter
@@ -168,3 +230,4 @@ class SephiriaOptions(PerGameCommonOptions):
     traps: Traps
     sapphire_multiplier: SapphireMultiplier
     death_link: DeathLink
+    enabled_hard_mode_settings: EnabledHardModeSettings

@@ -24,6 +24,7 @@ from .Locations import (
     location_table,
     shrine_check_counts,
     chapter_floor_counts,
+    chapter_progressive_floor_unlock_counts,
     floor_names,
     late_floor_start_by_goal_chapter,
     early_destiny_inscription_candidates,
@@ -33,6 +34,7 @@ from .Locations import (
     mission_location_table,
     boss_defeat_location_table,
     boss_defeat_floor_table,
+    boss_defeat_chapter_table,
     MAX_SEPHIRITE_CHECKS_PER_FLOOR
 )
 
@@ -61,6 +63,45 @@ class SephiriaWorld(World):
 
     item_name_to_id = item_table
     location_name_to_id = location_table
+
+
+    def create_item(self, name: str) -> SephiriaItem:
+        progression_items = {
+            "Tablet Unlock",
+            "Progressive Artifact Unlock",
+            "Bond Artifact Unlock",
+            "Progressive Anvil Unlock",
+            "Progressive Floor Unlock",
+            "Starting Cintamani Stone",
+        }
+
+        if name in mission_unlock_items:
+            classification = (
+                ItemClassification.progression
+                | ItemClassification.useful
+            )
+
+        elif (
+            name in progression_items
+            or name in weapon_unlock_items
+        ):
+            classification = ItemClassification.progression
+
+        elif name in trap_item_counts:
+            classification = ItemClassification.trap
+
+        elif name in {"5 Sapphires", "Costume Dyeing"}:
+            classification = ItemClassification.filler
+
+        else:
+            classification = ItemClassification.useful
+
+        return SephiriaItem(
+            name,
+            classification,
+            item_table[name],
+            self.player
+        )
 
     def create_regions(self):
         menu = Region(
@@ -96,6 +137,12 @@ class SephiriaWorld(World):
         floor_count = chapter_floor_counts[
             goal_chapter
         ]
+
+        boss_floor_count = (
+            chapter_progressive_floor_unlock_counts[
+                goal_chapter
+            ] + 1
+        )
 
         for floor_number in range(
             1,
@@ -182,9 +229,12 @@ class SephiriaWorld(World):
                 location_name
             ]
 
-            # Only include bosses from floors that exist
-            # for the selected goal chapter.
-            if boss_floor > floor_count:
+            # Only include bosses available in this chapter
+            # and within the chapter's boss floor limit.
+            if (
+                boss_defeat_chapter_table[location_name] > goal_chapter
+                or boss_floor > boss_floor_count
+            ):
                 continue
 
             location = SephiriaLocation(
@@ -256,6 +306,17 @@ class SephiriaWorld(World):
             self.options.traps.value
         )
 
+        enabled_hard_mode_settings = set(
+            self.options.enabled_hard_mode_settings.value
+        )
+
+        enabled_reduction_counts = {
+            item_name: count
+            for item_name, count in hard_mode_reduction_counts.items()
+            if item_name.removesuffix(" Reduction")
+            in enabled_hard_mode_settings
+        }
+
         shrine_count = shrine_check_counts[
             goal_chapter
         ]
@@ -263,6 +324,14 @@ class SephiriaWorld(World):
         floor_count = chapter_floor_counts[
             goal_chapter
         ]
+
+        progressive_floor_unlock_count = (
+            chapter_progressive_floor_unlock_counts[goal_chapter]
+        )
+
+        boss_floor_count = (
+            progressive_floor_unlock_count + 1
+        )
 
         sephirite_count = sum(
             get_sephirite_check_count(
@@ -311,9 +380,12 @@ class SephiriaWorld(World):
                         f"{item_name}."
                     )
 
-                # Do not add rewards for bosses that cannot
-                # appear with the selected Goal Chapter.
-                if boss_floor > floor_count:
+                # Only include boss rewards for bosses available
+                # in the selected chapter and boss floor range.
+                if (
+                    boss_defeat_chapter_table[boss_location_name] > goal_chapter
+                    or boss_floor > boss_floor_count
+                ):
                     continue
 
             available_permanent_reward_items.append(
@@ -329,9 +401,10 @@ class SephiriaWorld(World):
         boss_defeat_count = sum(
             1
             for location_name in boss_defeat_location_table
-            if boss_defeat_floor_table[
-                location_name
-            ] <= floor_count
+            if (
+                boss_defeat_chapter_table[location_name] <= goal_chapter
+                and boss_defeat_floor_table[location_name] <= boss_floor_count
+            )
         )
 
         total_location_count = (
@@ -348,7 +421,7 @@ class SephiriaWorld(World):
         # -------------------------------------------------
 
         reduction_item_count = sum(
-            hard_mode_reduction_counts.values()
+            enabled_reduction_counts.values()
         )
 
         costume_item_count = (
@@ -397,6 +470,7 @@ class SephiriaWorld(World):
             talent_point_item_count +
             destiny_upgrade_item_count +
             progressive_anvil_unlock_count +
+            progressive_floor_unlock_count +
             starting_cintamani_stone_count +
             trap_item_count
         )
@@ -460,7 +534,7 @@ class SephiriaWorld(World):
 
         reduction_pool = []
 
-        for item_name, count in hard_mode_reduction_counts.items():
+        for item_name, count in enabled_reduction_counts.items():
             reduction_pool.extend(
                 [item_name] * count
             )
@@ -560,7 +634,7 @@ class SephiriaWorld(World):
         for item_name in mission_unlock_items:
             item = SephiriaItem(
                 item_name,
-                ItemClassification.progression,
+                ItemClassification.progression | ItemClassification.useful,
                 item_table[item_name],
                 self.player
             )
@@ -650,6 +724,24 @@ class SephiriaWorld(World):
                     ItemClassification.progression,
                     item_table[
                         "Progressive Anvil Unlock"
+                    ],
+                    self.player
+                )
+            )
+
+        # -------------------------------------------------
+        # Progressive Floor Unlocks
+        # -------------------------------------------------
+
+        for _ in range(
+            progressive_floor_unlock_count
+        ):
+            self.multiworld.itempool.append(
+                SephiriaItem(
+                    "Progressive Floor Unlock",
+                    ItemClassification.progression,
+                    item_table[
+                        "Progressive Floor Unlock"
                     ],
                     self.player
                 )
@@ -758,11 +850,112 @@ class SephiriaWorld(World):
             ]
         )
 
+        boss_floor_count = (
+            chapter_progressive_floor_unlock_counts[
+                goal_chapter
+            ] + 1
+        )
+
         sephirites_per_floor = (
             self.options
                 .sephirites_per_floor
                 .value
         )
+
+        # -------------------------------------------------
+        # Boss floor progression logic
+        # -------------------------------------------------
+
+        for (
+            location_name,
+            boss_floor
+        ) in boss_defeat_floor_table.items():
+
+            # Boss is not available in this chapter
+            # or is beyond the chapter's boss floor limit.
+            if (
+                boss_defeat_chapter_table[location_name] > goal_chapter
+                or boss_floor > boss_floor_count
+            ):
+                continue
+
+            # Mole Stronghold is always unlocked.
+            if boss_floor <= 1:
+                continue
+
+            required_floor_unlocks = (
+                boss_floor - 1
+            )
+
+            location = (
+                self.multiworld.get_location(
+                    location_name,
+                    self.player
+                )
+            )
+
+            set_rule(
+                location,
+                lambda state,
+                        required_floor_unlocks=
+                            required_floor_unlocks:
+                    state.has(
+                        "Progressive Floor Unlock",
+                        self.player,
+                        required_floor_unlocks
+                    )
+            )
+
+        # -------------------------------------------------
+        # Floor progression logic
+        # -------------------------------------------------
+
+        for floor_number in range(
+            2,
+            floor_count + 1
+        ):
+            floor_name = floor_names[
+                floor_number
+            ]
+
+            required_floor_unlocks = (
+                floor_number - 1
+            )
+
+            floor_check_count = (
+                get_sephirite_check_count(
+                    floor_number,
+                    sephirites_per_floor
+                )
+            )
+
+            for item_number in range(
+                1,
+                floor_check_count + 1
+            ):
+                location_name = (
+                    f"{floor_name} Sephirite Item "
+                    f"{item_number}"
+                )
+
+                location = (
+                    self.multiworld.get_location(
+                        location_name,
+                        self.player
+                    )
+                )
+
+                set_rule(
+                    location,
+                    lambda state,
+                            required_floor_unlocks=
+                                required_floor_unlocks:
+                        state.has(
+                            "Progressive Floor Unlock",
+                            self.player,
+                            required_floor_unlocks
+                        )
+                )
 
         for floor_number in range(
             late_floor_start,
@@ -816,8 +1009,12 @@ class SephiriaWorld(World):
             if boss_floor < late_floor_start:
                 continue
 
-            # Boss may not exist for the selected chapter.
-            if boss_floor > floor_count:
+            # Boss must be available in the selected chapter
+            # and within the chapter's boss floor limit.
+            if (
+                boss_defeat_chapter_table[location_name] > goal_chapter
+                or boss_floor > boss_floor_count
+            ):
                 continue
 
             location = (
@@ -945,6 +1142,190 @@ class SephiriaWorld(World):
             )
 
 
+        # -------------------------------------------------
+        # Costume mission logic
+        # -------------------------------------------------
+
+        # White Wolf requires defeating Rataka five times.
+        # Rataka is found in Woodlands.
+        set_rule(
+            self.multiworld.get_location(
+                "Costume Mission - White Wolf",
+                self.player
+            ),
+            lambda state:
+                state.has(
+                    "Progressive Floor Unlock",
+                    self.player,
+                    1
+                )
+        )
+
+        # Red-Clothed Cat requires 2 floor unlocks.
+        set_rule(
+            self.multiworld.get_location(
+                "Costume Mission - Red-Clothed Cat",
+                self.player
+            ),
+            lambda state:
+                state.has(
+                    "Progressive Floor Unlock",
+                    self.player,
+                    2
+                )
+        )
+
+        # Red Fox requires 2 floor unlocks and Tablet Unlock.
+        set_rule(
+            self.multiworld.get_location(
+                "Costume Mission - Red Fox",
+                self.player
+            ),
+            lambda state:
+                state.has(
+                    "Progressive Floor Unlock",
+                    self.player,
+                    2
+                )
+                and state.has(
+                    "Tablet Unlock",
+                    self.player
+                )
+        )
+
+        # Frog requires 2 Progressive Floor Unlocks.
+        set_rule(
+            self.multiworld.get_location(
+                "Costume Mission - Frog",
+                self.player
+            ),
+            lambda state:
+                state.has(
+                    "Progressive Floor Unlock",
+                    self.player,
+                    2
+                )
+        )
+
+        # Otter requires 2 Progressive Floor Unlocks.
+        set_rule(
+            self.multiworld.get_location(
+                "Costume Mission - Otter",
+                self.player
+            ),
+            lambda state:
+                state.has(
+                    "Progressive Floor Unlock",
+                    self.player,
+                    2
+                )
+        )
+
+        # Wizard Bunny requires 2 floor unlocks
+        # and 1 Progressive Artifact Unlock.
+        set_rule(
+            self.multiworld.get_location(
+                "Costume Mission - Wizard Bunny",
+                self.player
+            ),
+            lambda state:
+                state.has(
+                    "Progressive Floor Unlock",
+                    self.player,
+                    2
+                )
+                and state.has(
+                    "Progressive Artifact Unlock",
+                    self.player,
+                    1
+                )
+        )
+
+        # Eagle requires 2 Progressive Floor Unlocks.
+        set_rule(
+            self.multiworld.get_location(
+                "Costume Mission - Eagle",
+                self.player
+            ),
+            lambda state:
+                state.has(
+                    "Progressive Floor Unlock",
+                    self.player,
+                    2
+                )
+        )
+
+        # Turtle requires 2 Progressive Floor Unlocks.
+        set_rule(
+            self.multiworld.get_location(
+                "Costume Mission - Turtle",
+                self.player
+            ),
+            lambda state:
+                state.has(
+                    "Progressive Floor Unlock",
+                    self.player,
+                    2
+                )
+        )
+
+        # Ghost requires 2 Progressive Floor Unlocks.
+        set_rule(
+            self.multiworld.get_location(
+                "Costume Mission - Ghost",
+                self.player
+            ),
+            lambda state:
+                state.has(
+                    "Progressive Floor Unlock",
+                    self.player,
+                    2
+                )
+        )
+
+        # Wingless Bat requires 2 Progressive Floor Unlocks.
+        set_rule(
+            self.multiworld.get_location(
+                "Costume Mission - Wingless Bat",
+                self.player
+            ),
+            lambda state:
+                state.has(
+                    "Progressive Floor Unlock",
+                    self.player,
+                    2
+                )
+        )
+
+        # Wingless Bat requires finding the blood donation
+        # shrine five times, which could take a LONG time.
+        # Prevent progression items from appearing here.
+        add_item_rule(
+            self.multiworld.get_location(
+                "Costume Mission - Wingless Bat",
+                self.player
+            ),
+            lambda item:
+                not item.advancement
+        )
+
+        # -------------------------------------------------
+        # Archipelago Go Mode requirement
+        # -------------------------------------------------
+
+        required_floor_unlocks_for_goal = (
+            chapter_progressive_floor_unlock_counts[goal_chapter]
+        )
+
+        self.multiworld.completion_condition[self.player] = (
+            lambda state: state.has(
+                "Progressive Floor Unlock",
+                self.player,
+                required_floor_unlocks_for_goal
+            )
+        )
+
+
     def fill_slot_data(self):
         return {
             "goal_chapter":
@@ -964,6 +1345,11 @@ class SephiriaWorld(World):
                 self.options
                     .sephirites_per_floor
                     .value,
+
+            "progressive_floor_unlock_count":
+                chapter_progressive_floor_unlock_counts[
+                    self.options.goal_chapter.value
+                ],
 
             "randomize_anvil_unlocks":
                 bool(
@@ -999,6 +1385,13 @@ class SephiriaWorld(World):
                 bool(
                     self.options
                         .traps
+                        .value
+                ),
+
+            "enabled_hard_mode_settings":
+                list(
+                    self.options
+                        .enabled_hard_mode_settings
                         .value
                 ),
         }

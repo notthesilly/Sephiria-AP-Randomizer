@@ -53,6 +53,7 @@ namespace SephiriaAPRandomizer
         public static int RequiredChapterClears { get; private set; }
         public static bool UniqueWeaponsRequired { get; private set; }
         public static bool RandomizeAnvilUnlocks { get; private set; } = true;
+        public static int ProgressiveFloorUnlockCount { get; private set; }
         public static int StartingCintamaniStonePoolCount { get; private set; } = 0;
         private static bool cintamaniSyncPending;
         public static int SapphireMultiplier { get; private set; } = 1;
@@ -506,6 +507,7 @@ namespace SephiriaAPRandomizer
         private static bool wasArchipelagoConnected;
         private static bool disconnectMessageShown;
         private static bool suppressOutgoingDeathLinkForRunVictory;
+        private static bool suppressOutgoingDeathLinkForForcedFloorDeath;
 
         public static bool IsArchipelagoConnected
         {
@@ -3360,9 +3362,19 @@ namespace SephiriaAPRandomizer
                         GameName =
                             scoutedItem.ItemGame,
 
-                        Flags = Convert.ToInt32(
-                            scoutedItem.Flags
-                        )
+                        Flags =
+                            string.Equals(
+                                scoutedItem.ItemGame,
+                                "Sephiria",
+                                StringComparison.Ordinal
+                            ) &&
+                            archipelagoMissionUnlockItems.ContainsKey(
+                                scoutedItem.ItemDisplayName
+                            )
+                                ? 2
+                                : Convert.ToInt32(
+                                    scoutedItem.Flags
+                                )
                     };
                 }
 
@@ -3898,7 +3910,7 @@ namespace SephiriaAPRandomizer
                         { "TRAPDAMAGE", 2 },
                         { "PROLIFERATE", 2 }
                     };
-
+        private static HashSet<string> enabledArchipelagoHardModeSettings;
         public static bool IsArchipelagoSave
         {
             get
@@ -3917,6 +3929,8 @@ namespace SephiriaAPRandomizer
             RequiredChapterClears = 0;
             UniqueWeaponsRequired = false;
             RandomizeAnvilUnlocks = true;
+            ProgressiveFloorUnlockCount = 0;
+            enabledArchipelagoHardModeSettings = null;
             SapphireMultiplier = 1;
             StartingCostumeId = null;
             StartingWeaponType = null;
@@ -3933,6 +3947,7 @@ namespace SephiriaAPRandomizer
             cannotNormalAttackTrapUntil = 0f;
             flippedControlsTrapUntil = 0f;
             suppressOutgoingDeathLinkForRunVictory = false;
+            suppressOutgoingDeathLinkForForcedFloorDeath = false;
             StartingCintamaniStonePoolCount = 0;
             cintamaniSyncPending = false;
 
@@ -5076,6 +5091,56 @@ namespace SephiriaAPRandomizer
                         ]
                     );
 
+                ProgressiveFloorUnlockCount =
+                    Convert.ToInt32(
+                        loginSuccess.SlotData[
+                            "progressive_floor_unlock_count"
+                        ]
+                    );
+
+                enabledArchipelagoHardModeSettings = null;
+
+                if (loginSuccess.SlotData.ContainsKey(
+                        "enabled_hard_mode_settings"))
+                {
+                    object rawSettings =
+                        loginSuccess.SlotData[
+                            "enabled_hard_mode_settings"
+                        ];
+
+                    System.Collections.IEnumerable settings =
+                        rawSettings as System.Collections.IEnumerable;
+
+                    if (settings != null && !(rawSettings is string))
+                    {
+                        enabledArchipelagoHardModeSettings =
+                            new HashSet<string>(StringComparer.Ordinal);
+
+                        foreach (object setting in settings)
+                        {
+                            string settingName = Convert.ToString(setting);
+
+                            if (!string.IsNullOrWhiteSpace(settingName))
+                            {
+                                enabledArchipelagoHardModeSettings.Add(
+                                    settingName
+                                );
+                            }
+                        }
+
+                        MelonLogger.Msg(
+                            "[AP Hard Mode] Enabled settings: " +
+                            enabledArchipelagoHardModeSettings.Count
+                        );
+                    }
+                    else
+                    {
+                        MelonLogger.Warning(
+                            "[AP Hard Mode] Invalid settings list received."
+                        );
+                    }
+                }
+
                 StartingCintamaniStonePoolCount =
                     loginSuccess.SlotData.ContainsKey(
                         "starting_cintamani_stones"
@@ -5508,11 +5573,18 @@ namespace SephiriaAPRandomizer
                         );
                 }
 
-                int desiredLevel =
-                    Math.Max(
-                        0,
-                        shardMaxLevel - reductionCount
+                bool modifierEnabled =
+                    enabledArchipelagoHardModeSettings == null ||
+                    (
+                        reductionItemName != null &&
+                        enabledArchipelagoHardModeSettings.Contains(
+                            reductionItemName.Replace(" Reduction", "")
+                        )
                     );
+
+                int desiredLevel = modifierEnabled
+                    ? Math.Max(0, shardMaxLevel - reductionCount)
+                    : 0;
 
                 string saveKey =
                     "HardModeShard_" +
@@ -6360,6 +6432,79 @@ namespace SephiriaAPRandomizer
                             StringComparison.Ordinal
                         )
                 )
+            );
+        }
+
+        public static int GetProgressiveFloorUnlockItemCount()
+        {
+            ArchipelagoSession apSession =
+                session as ArchipelagoSession;
+
+            if (apSession == null)
+                return 0;
+
+            return apSession.Items.AllItemsReceived.Count(
+                item =>
+                    item != null &&
+                    string.Equals(
+                        item.ItemName,
+                        "Progressive Floor Unlock",
+                        StringComparison.Ordinal
+                    )
+            );
+        }
+
+        public static bool TryGetRequiredFloorUnlockCount(
+            int currentStageProgress,
+            out int requiredUnlocks)
+        {
+            switch (currentStageProgress)
+            {
+                case 1:
+                    requiredUnlocks = 1;
+                    return true;
+
+                case 2:
+                    requiredUnlocks = 2;
+                    return true;
+
+                case 3:
+                    requiredUnlocks = 3;
+                    return true;
+
+                case 4:
+                    requiredUnlocks = 4;
+                    return true;
+
+                case 6:
+                    requiredUnlocks = 5;
+                    return true;
+
+                default:
+                    requiredUnlocks = 0;
+                    return false;
+            }
+        }
+
+        public static bool IsMainProgressionStage(
+            string stageName)
+        {
+            if (DungeonManager.Instance == null ||
+                DungeonManager.Instance.Race == null ||
+                DungeonManager.Instance.Race.stages == null ||
+                string.IsNullOrEmpty(stageName))
+            {
+                return false;
+            }
+
+            return DungeonManager.Instance.Race.stages.Any(
+                stage =>
+                    stage != null &&
+                    string.Equals(
+                        stage.name,
+                        stageName,
+                        StringComparison.Ordinal
+                    )
             );
         }
 
@@ -8797,6 +8942,11 @@ namespace SephiriaAPRandomizer
             if (!cintamaniSyncPending)
                 return;
 
+            // Never grant another Cintamani Stone while
+            // a locked-floor forced death is ending the run.
+            if (suppressOutgoingDeathLinkForForcedFloorDeath)
+                return;
+
             if (!IsArchipelagoSave ||
                 SaveManager.CurrentRun == null)
             {
@@ -10215,6 +10365,22 @@ namespace SephiriaAPRandomizer
                 return;
             }
 
+            // Ignore incoming DeathLinks while a locked-floor
+            // forced death is ending the current run.
+            if (suppressOutgoingDeathLinkForForcedFloorDeath)
+            {
+                pendingDeathLink = null;
+
+                object ignoredAfterForcedDeath;
+
+                while (receivedDeathLinks.TryDequeue(
+                    out ignoredAfterForcedDeath))
+                {
+                }
+
+                return;
+            }
+
             PlayerAvatar player = null;
 
             if (CombatManager.Instance != null)
@@ -10460,6 +10626,20 @@ namespace SephiriaAPRandomizer
                 return;
             }
 
+            // The floor progression gate intentionally ended this run.
+            // This is not a normal gameplay death and must not send
+            // an Archipelago DeathLink.
+            if (suppressOutgoingDeathLinkForForcedFloorDeath)
+            {
+                suppressNextOutgoingDeathLink = false;
+
+                MelonLogger.Msg(
+                    "[AP DeathLink] Suppressed outgoing DeathLink " +
+                    "for a locked-floor run-ending death."
+                );
+
+                return;
+            }
 
             // Incoming DeathLink caused this death.
             // Do not bounce it back out.
@@ -10542,10 +10722,26 @@ namespace SephiriaAPRandomizer
             suppressOutgoingDeathLinkForRunVictory = true;
         }
 
+        public static void MarkArchipelagoForcedFloorDeath()
+        {
+            if (!IsArchipelagoSave)
+                return;
+
+            if (!suppressOutgoingDeathLinkForForcedFloorDeath)
+            {
+                MelonLogger.Msg(
+                    "[AP Floor Gate] Forced run-ending death. " +
+                    "Outgoing DeathLink will be suppressed."
+                );
+            }
+
+            suppressOutgoingDeathLinkForForcedFloorDeath = true;
+        }
 
         public static void ResetArchipelagoRunVictory()
         {
             suppressOutgoingDeathLinkForRunVictory = false;
+            suppressOutgoingDeathLinkForForcedFloorDeath = false;
 
             // Nothing from the previous life/run should
             // carry into the new run.
@@ -11461,6 +11657,31 @@ public class ArchipelagoJournalContentController : MonoBehaviour
                 }
             };
 
+    private static readonly Dictionary<string, int>
+        bossFirstChapter =
+            new Dictionary<string, int>(
+                StringComparer.Ordinal
+            )
+            {
+                // Chapter 1
+                { "Mogdi", 1 },
+                { "Rataka", 1 },
+                { "Erma", 1 },
+                { "Askard", 1 },
+
+                // Chapter 2
+                { "Odner", 2 },
+                { "Lerid", 2 },
+                { "Pentaxis", 2 },
+
+                // Chapter 3
+                { "Kovess", 3 },
+
+                // Chapter 4
+                { "Kraz", 4 },
+                { "Haz", 4 }
+            };
+
 
     // =========================================================
     // Initialization
@@ -11506,6 +11727,16 @@ public class ArchipelagoJournalContentController : MonoBehaviour
 
     private void Update()
     {
+        if (SephiriaMod.IsArchipelagoSave &&
+            SephiriaMod.GoalChapter >= 1 &&
+            chapterButtons.Count == 0 &&
+            layout != null &&
+            layout.locationIconOriginal != null &&
+            layout.locationIconContainer != null)
+        {
+            BuildFloorButtons();
+        }
+
         if (currentSubTab ==
             ArchipelagoJournalSubTab.Console)
         {
@@ -13922,6 +14153,16 @@ public class ArchipelagoJournalContentController : MonoBehaviour
 
         foreach (string floor in floors)
         {
+            bool hasAvailableBoss =
+                bossesByFloor[floor].Any(
+                    bossName =>
+                        bossFirstChapter[bossName] <=
+                        SephiriaMod.GoalChapter
+                );
+
+            if (!hasAvailableBoss)
+                continue;
+
             UI_JournalPanel_SearchOptionButton button =
                 UnityEngine.Object.Instantiate(
                     layout.locationIconOriginal,
@@ -14019,6 +14260,14 @@ public class ArchipelagoJournalContentController : MonoBehaviour
 
             return;
         }
+
+        bosses = bosses
+            .Where(
+                bossName =>
+                    bossFirstChapter[bossName] <=
+                    SephiriaMod.GoalChapter
+            )
+            .ToArray();
 
         foreach (string bossName in bosses)
         {
@@ -16211,7 +16460,7 @@ public static class DesertEndEventPatch
         {
             if ((bool)player)
             {
-                player.PlayerAvatar.Die(5, null);
+                player.PlayerAvatar.ForceDie();
             }
         }
 
@@ -16440,7 +16689,7 @@ public static class Chapter5ClearPatch
             if ((bool)player &&
                 (bool)player.PlayerAvatar)
             {
-                player.PlayerAvatar.Die(5, null);
+                player.PlayerAvatar.ForceDie();
             }
         }
     }
@@ -16512,7 +16761,7 @@ public static class Chapter6ClearPatch
             if ((bool)player &&
                 (bool)player.PlayerAvatar)
             {
-                player.PlayerAvatar.Die(5, null);
+                player.PlayerAvatar.ForceDie();
             }
         }
 
@@ -16596,7 +16845,7 @@ public static class Chapter2GameOverPatch
                 saveCurrentRun: false
             );
 
-            __instance.PlayerAvatar.Die(5, null);
+            __instance.PlayerAvatar.ForceDie();
             return false;
         }
 
@@ -16651,7 +16900,7 @@ public static class Chapter3EndPatch
         foreach (PlayerSpawner player in PlayerSpawner.MultiplayerList)
         {
             if ((bool)player)
-                player.PlayerAvatar.Die(5, null);
+                player.PlayerAvatar.ForceDie();
         }
 
         return false;
@@ -16711,7 +16960,7 @@ public static class Chapter4EndPatch
         {
             if ((bool)player)
             {
-                player.PlayerAvatar.Die(5, null);
+                player.PlayerAvatar.ForceDie();
             }
         }
 
@@ -18631,16 +18880,6 @@ public static class ArchipelagoLevelUpStageTransitionPatch
             return true;
         }
 
-        LevelController levelController =
-            __instance.GetComponent<LevelController>();
-
-        if (levelController == null ||
-            levelController.levelUpQueue == null ||
-            levelController.levelUpQueue.Count == 0)
-        {
-            return true;
-        }
-
         FloorData currentFloor;
 
         if (!DungeonManager.Instance.generatedFloors.TryGetValue(
@@ -18660,31 +18899,97 @@ public static class ArchipelagoLevelUpStageTransitionPatch
             return true;
         }
 
-        bool protectedTransition =
-            currentStageProgress == 1 ||
-            currentStageProgress == 2 ||
-            currentStageProgress == 3 ||
-            currentStageProgress == 4 ||
-            currentStageProgress == 6;
+        int requiredFloorUnlocks;
 
-        if (!protectedTransition)
+        if (!SephiriaMod.TryGetRequiredFloorUnlockCount(
+                currentStageProgress,
+                out requiredFloorUnlocks))
+        {
             return true;
+        }
+
+        // -------------------------------------------------
+        // Level-up gate runs FIRST.
+        // -------------------------------------------------
+
+        LevelController levelController =
+            __instance.GetComponent<LevelController>();
+
+        if (levelController != null &&
+            levelController.levelUpQueue != null &&
+            levelController.levelUpQueue.Count > 0)
+        {
+            MelonLogger.Msg(
+                $"[AP Stage Gate] Blocked " +
+                $"{currentFloor.stageName} ({currentStageProgress}) -> " +
+                $"{stageName}. " +
+                $"QueuedLevelUps={levelController.levelUpQueue.Count}"
+            );
+
+            if (UIManager.Instance != null)
+            {
+                UIManager.Instance
+                    .GetElement<UI_SystemMessage>()
+                    .Open(
+                        "Claim your level-up reward before continuing.",
+                        4f
+                    );
+            }
+
+            return false;
+        }
+
+        // -------------------------------------------------
+        // Floor unlocks only apply to main progression
+        // stages, not side stages.
+        // -------------------------------------------------
+
+        if (!SephiriaMod.IsMainProgressionStage(
+                stageName))
+        {
+            return true;
+        }
+
+        // If this main stage was already generated and is
+        // not farther forward than our current stage, this
+        // is not a new floor progression gate.
+        int targetStageProgress;
+
+        if (DungeonManager.Instance.stageProgress.TryGetValue(
+                stageName,
+                out targetStageProgress) &&
+            targetStageProgress <= currentStageProgress)
+        {
+            return true;
+        }
+
+        int receivedFloorUnlocks =
+            SephiriaMod.GetProgressiveFloorUnlockItemCount();
+
+        if (receivedFloorUnlocks >=
+            requiredFloorUnlocks)
+        {
+            return true;
+        }
 
         MelonLogger.Msg(
-            $"[AP Stage Gate] Blocked " +
+            $"[AP Floor Gate] Locked transition: " +
             $"{currentFloor.stageName} ({currentStageProgress}) -> " +
             $"{stageName}. " +
-            $"QueuedLevelUps={levelController.levelUpQueue.Count}"
+            $"FloorUnlocks={receivedFloorUnlocks}/" +
+            $"{requiredFloorUnlocks}"
         );
 
-        if (UIManager.Instance != null)
+        SephiriaMod.MarkArchipelagoForcedFloorDeath();
+
+        foreach (PlayerSpawner player
+            in PlayerSpawner.MultiplayerList)
         {
-            UIManager.Instance
-                .GetElement<UI_SystemMessage>()
-                .Open(
-                    "Claim your level-up reward before continuing.",
-                    4f
-                );
+            if ((bool)player &&
+                (bool)player.PlayerAvatar)
+            {
+                player.PlayerAvatar.ForceDie();
+            }
         }
 
         return false;

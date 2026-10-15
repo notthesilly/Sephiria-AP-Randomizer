@@ -125,6 +125,8 @@ item_table = {
     "Bag Shuffle Trap": 109,
 
     "Starting Cintamani Stone": 110,
+
+    "Progressive Floor Unlock": 111,
 }
 
 
