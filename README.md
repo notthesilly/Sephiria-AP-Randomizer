@@ -8,7 +8,7 @@ This project is currently in early development. The current build focuses on all
 
 ## Current Status
 
-Current version: **v0.1.0-alpha**
+Current version: **v0.3.0-beta**
 
 The following functionality is currently implemented:
 
